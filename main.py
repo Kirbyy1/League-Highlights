@@ -29,7 +29,9 @@ from app.config import AppConfig
 from app.controller import RecorderController
 from app.logging_setup import configure_logging
 from app.services.update_manager import UpdateManager
-from app.ui.main_window import MainWindow
+from app.ui.enhanced_main_window import EnhancedMainWindow
+from app.ui.layout_style import LAYOUT_STYLE
+from app.ui.polish_style import POLISH_STYLE
 
 
 def main() -> int:
@@ -51,7 +53,13 @@ def main() -> int:
     try:
         controller = RecorderController(config)
         update_manager = UpdateManager(config)
-        window = MainWindow(config, controller, update_manager)
+        window = EnhancedMainWindow(config, controller, update_manager)
+
+        # Existing app style, pass-1 polish, then the structural pass-2 rules.
+        window.setStyleSheet(
+            f"{window.styleSheet()}\n{POLISH_STYLE}\n{LAYOUT_STYLE}"
+        )
+
         launched_at_startup = "--startup" in sys.argv
         if not (config.start_minimized or launched_at_startup):
             window.show()
