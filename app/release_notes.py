@@ -32,7 +32,7 @@ _RELEASE_NOTES: dict[str, tuple[dict[str, object], ...]] = {
             ),
         },
         {
-            "eyebrow": "WHAT'S NEW",
+            "eyebrow": "WHAT'S NEW HOMIES",
             "title": "A proper release highlights carousel",
             "description": (
                 "After an update, a focused release dialog presents the important changes "

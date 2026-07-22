@@ -275,15 +275,6 @@ class TitleBar(QFrame):
 
         layout.addWidget(badge)
         layout.addWidget(self.menu_button)
-
-        self.version_label = QLabel(f"v{APP_VERSION}")
-        self.version_label.setObjectName("AppVersionLabel")
-        self.version_label.setToolTip(f"League Highlights version {APP_VERSION}")
-        self.version_label.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
-            True,
-        )
-        layout.addWidget(self.version_label)
         layout.addWidget(self.back_button)
         layout.addLayout(copy)
         layout.addStretch()
@@ -839,7 +830,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = config
         self.controller = controller
-        self.setWindowTitle(f"League Highlights v{APP_VERSION}")
+        self.setWindowTitle("League Highlights")
         self.setWindowIcon(QIcon(str(icon_path())))
         self.resize(1360, 830)
         self.setMinimumSize(1000, 650)

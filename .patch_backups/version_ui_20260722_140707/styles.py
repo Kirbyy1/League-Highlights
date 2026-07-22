@@ -1125,16 +1125,6 @@ QFrame#SidebarFooter QToolButton#SidebarIconButton {
     padding: 4px;
     border-radius: 6px;
 }
-
-QLabel#AppVersionLabel {
-    color: #768391;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 7px;
-    background: #111923;
-    border: 1px solid #26313D;
-    border-radius: 5px;
-}
 """
 
 # v43 media-first desktop refresh: flatter surfaces, compact navigation, tighter hierarchy
