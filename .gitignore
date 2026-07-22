@@ -17,3 +17,9 @@ logs/
 *.mp4
 *.mkv
 *.wav
+
+release/
+*.exe
+*.zip
+SHA256SUMS.txt
+update.json
