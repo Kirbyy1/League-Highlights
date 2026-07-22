@@ -23,6 +23,7 @@ class EnhancedMainWindow(MainWindow):
     """Presentation and navigation enhancements layered over the stable app."""
 
     def __init__(self, config, controller, update_manager=None) -> None:
+        self._recording_seconds = 0
         super().__init__(config, controller, update_manager)
 
         self._enhance_highlights_page()
@@ -260,6 +261,52 @@ class EnhancedMainWindow(MainWindow):
         old_tabs.deleteLater()
 
     # ------------------------------------------------------------------
+    # Recording timer
+    # ------------------------------------------------------------------
+
+    def _on_state_changed(self, state: RecorderState, detail: str) -> None:
+        """Keep the compatibility timer out of the navigation sidebar."""
+
+        super()._on_state_changed(state, detail)
+        self.status_time.hide()
+
+        if hasattr(self, "bottom_recording_time"):
+            self._refresh_bottom_status()
+
+    def _update_recording_time(self, seconds: int) -> None:
+        """Display session duration in the footer instead of the sidebar."""
+
+        self._recording_seconds = max(0, int(seconds))
+        self.status_time.hide()
+
+        if hasattr(self, "bottom_recording_time"):
+            self.bottom_recording_time.setText(
+                self._format_recording_time(self._recording_seconds)
+            )
+            self._refresh_recording_timer_visibility()
+
+    @staticmethod
+    def _format_recording_time(seconds: int) -> str:
+        seconds = max(0, int(seconds))
+        return (
+            f"{seconds // 3600:02d}:"
+            f"{(seconds % 3600) // 60:02d}:"
+            f"{seconds % 60:02d}"
+        )
+
+    def _refresh_recording_timer_visibility(self) -> None:
+        if not hasattr(self, "bottom_recording_time"):
+            return
+
+        state = getattr(self.controller, "state", RecorderState.WAITING)
+        visible = bool(
+            getattr(self.controller, "recording", False)
+            or state in {RecorderState.STARTING, RecorderState.SAVING}
+        )
+        self.bottom_recording_separator.setVisible(visible)
+        self.bottom_recording_time.setVisible(visible)
+
+    # ------------------------------------------------------------------
     # Bottom status bar
     # ------------------------------------------------------------------
 
@@ -277,6 +324,15 @@ class EnhancedMainWindow(MainWindow):
         self.bottom_state_text = QLabel("Waiting")
         self.bottom_state_text.setObjectName("BottomStateText")
 
+        self.bottom_recording_separator = self._status_separator()
+        self.bottom_recording_time = QLabel(
+            self._format_recording_time(self._recording_seconds)
+        )
+        self.bottom_recording_time.setObjectName("BottomStatusMuted")
+        self.bottom_recording_time.setToolTip("Current recording session duration")
+        self.bottom_recording_separator.hide()
+        self.bottom_recording_time.hide()
+
         self.bottom_live_text = QLabel("League data: waiting")
         self.bottom_live_text.setObjectName("BottomStatusMuted")
 
@@ -291,6 +347,8 @@ class EnhancedMainWindow(MainWindow):
 
         layout.addWidget(self.bottom_state_dot)
         layout.addWidget(self.bottom_state_text)
+        layout.addWidget(self.bottom_recording_separator)
+        layout.addWidget(self.bottom_recording_time)
         layout.addWidget(self._status_separator())
         layout.addWidget(self.bottom_live_text)
         layout.addStretch()
@@ -331,6 +389,11 @@ class EnhancedMainWindow(MainWindow):
         self.bottom_state_dot.setProperty("state", dot_state)
         self.bottom_state_dot.style().unpolish(self.bottom_state_dot)
         self.bottom_state_dot.style().polish(self.bottom_state_dot)
+
+        self.bottom_recording_time.setText(
+            self._format_recording_time(self._recording_seconds)
+        )
+        self._refresh_recording_timer_visibility()
 
         live_text = str(
             getattr(self.controller, "event_status_text", "Waiting for League data")
