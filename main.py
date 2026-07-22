@@ -36,8 +36,7 @@ from app.ui.polish_style import POLISH_STYLE
 
 def main() -> int:
     if os.name != "nt":
-        print("League Highlights currently supports Windows 10/11 only.")
-        return 1
+        print("League Highlights currently supports Windows 10/11 only. Be careful")
 
     config = AppConfig.create_default()
     configure_logging(config.log_dir)
