@@ -50,8 +50,12 @@ from app.controller import RecorderController
 from app.models import ClipInfo, GameHighlights, RecorderState
 from app.services.video_recorder import RecorderDiagnostics
 from app.services.windows_startup import is_enabled as startup_is_enabled, set_enabled as set_startup_enabled
+from app.services.update_manager import UpdateInfo, UpdateManager
+from app.release_notes import notes_for_version
 from app.ui.styles import APP_STYLE
 from app.ui.inline_player import InlineHighlightPlayer
+from app.ui.whats_new_dialog import WhatsNewDialog
+from app.version import APP_VERSION
 
 
 RESOLUTION_OPTIONS: dict[str, tuple[int, int]] = {
@@ -197,6 +201,7 @@ class TitleBar(QFrame):
 
     backRequested = Signal()
     settingsRequested = Signal()
+    whatsNewRequested = Signal()
 
     def __init__(self, window: QMainWindow) -> None:
         super().__init__()
@@ -235,14 +240,18 @@ class TitleBar(QFrame):
         self.menu_button.setIcon(_app_icon("menu"))
         self.menu_button.setIconSize(QSize(18, 18))
         self.menu_button.setToolTip("Main menu")
-        self.menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
 
-        self.main_menu = QMenu(self.menu_button)
+        # Show the menu manually instead of attaching it as a QToolButton menu.
+        # This removes Qt's native menu-button subcontrol/pressed overlay.
+        self.main_menu = QMenu(self)
         self.main_menu.setObjectName("MainMenu")
         settings_action = QAction(_app_icon("settings"), "Settings", self.main_menu)
         settings_action.triggered.connect(self.settingsRequested.emit)
         self.main_menu.addAction(settings_action)
-        self.menu_button.setMenu(self.main_menu)
+        whats_new_action = QAction("What's new", self.main_menu)
+        whats_new_action.triggered.connect(self.whatsNewRequested.emit)
+        self.main_menu.addAction(whats_new_action)
+        self.menu_button.clicked.connect(self._show_main_menu)
 
         self.back_button = QToolButton()
         self.back_button.setObjectName("TitleBackButton")
@@ -292,6 +301,10 @@ class TitleBar(QFrame):
         layout.addWidget(self.minimize_button)
         layout.addWidget(self.maximize_button)
         layout.addWidget(self.close_button)
+
+    def _show_main_menu(self) -> None:
+        position = self.menu_button.mapToGlobal(QPoint(0, self.menu_button.height() + 4))
+        self.main_menu.popup(position)
 
     def show_default_context(self) -> None:
         self.back_button.hide()
@@ -808,7 +821,12 @@ class ClipToast(QFrame):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, config: AppConfig, controller: RecorderController) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        controller: RecorderController,
+        update_manager: UpdateManager | None = None,
+    ) -> None:
         super().__init__()
         self.config = config
         self.controller = controller
@@ -820,6 +838,12 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(APP_STYLE)
         self._force_exit = False
         self._tray_notice_shown = False
+        self.update_manager = update_manager
+        self._restart_after_update = False
+        self._update_launch_attempted = False
+        self._update_ready_notified = False
+        self._whats_new_scheduled = False
+        self._whats_new_dialog: WhatsNewDialog | None = None
         self._create_system_tray()
 
         root = QWidget()
@@ -830,6 +854,7 @@ class MainWindow(QMainWindow):
         self.title_bar = TitleBar(self)
         self.title_bar.backRequested.connect(self._back_to_games)
         self.title_bar.settingsRequested.connect(lambda: self._show_page(1))
+        self.title_bar.whatsNewRequested.connect(lambda: self._show_whats_new(force=True))
         root_layout.addWidget(self.title_bar)
 
         body = QHBoxLayout()
@@ -862,6 +887,7 @@ class MainWindow(QMainWindow):
             self.controller.event_status_connected,
         )
         self._sync_tray_state()
+        self._bind_update_manager()
 
     def _create_system_tray(self) -> None:
         self.tray_icon = QSystemTrayIcon(self)
@@ -917,6 +943,7 @@ class MainWindow(QMainWindow):
         self._force_exit = True
         self.controller.shutdown()
         self.tray_icon.hide()
+        self._launch_pending_update(self._restart_after_update)
         QGuiApplication.quit()
 
     def show_startup_notification(self) -> None:
@@ -1566,6 +1593,37 @@ class MainWindow(QMainWindow):
         storage_layout.addLayout(discord_target_row)
         layout.addWidget(storage)
 
+        updates = QFrame()
+        updates.setObjectName("SettingsSection")
+        updates_layout = QVBoxLayout(updates)
+        updates_layout.setContentsMargins(20, 18, 20, 18)
+        updates_layout.setSpacing(10)
+        updates_title = QLabel("Updates")
+        updates_title.setObjectName("SettingsTitle")
+        installed_version = QLabel(f"Installed version {APP_VERSION}")
+        installed_version.setObjectName("SettingName")
+        self.update_status_label = QLabel(
+            "Updates are checked automatically. Downloads are verified and installed only after the app exits."
+        )
+        self.update_status_label.setObjectName("CardMuted")
+        self.update_status_label.setWordWrap(True)
+        update_actions = QHBoxLayout()
+        self.check_updates_button = QPushButton("Check for updates")
+        self.check_updates_button.setObjectName("DarkButton")
+        self.check_updates_button.clicked.connect(self._check_for_updates)
+        self.restart_update_button = QPushButton("Restart to update")
+        self.restart_update_button.setObjectName("PrimaryButton")
+        self.restart_update_button.clicked.connect(self._restart_to_update)
+        self.restart_update_button.hide()
+        update_actions.addWidget(self.check_updates_button)
+        update_actions.addWidget(self.restart_update_button)
+        update_actions.addStretch()
+        updates_layout.addWidget(updates_title)
+        updates_layout.addWidget(installed_version)
+        updates_layout.addWidget(self.update_status_label)
+        updates_layout.addLayout(update_actions)
+        layout.addWidget(updates)
+
         recorder = QFrame()
         recorder.setObjectName("SettingsSection")
         recorder_layout = QVBoxLayout(recorder)
@@ -1965,6 +2023,125 @@ class MainWindow(QMainWindow):
     def _open_log_folder(self) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.config.log_dir)))
 
+    def _bind_update_manager(self) -> None:
+        if self.update_manager is None:
+            self.update_status_label.setText("Automatic updates are available in packaged builds.")
+            self.check_updates_button.setEnabled(False)
+            return
+        self.update_manager.status_changed.connect(self._on_update_status)
+        self.update_manager.update_available.connect(self._on_update_available)
+        self.update_manager.download_progress.connect(self._on_update_progress)
+        self.update_manager.update_ready.connect(self._on_update_ready)
+        self.update_manager.no_update.connect(self._on_no_update)
+        self.update_manager.error_occurred.connect(self._on_update_error)
+        pending = self.update_manager.pending_update
+        if pending is not None:
+            self._on_update_ready(pending)
+        else:
+            self.update_status_label.setText(self.update_manager.status_text)
+
+    def _check_for_updates(self) -> None:
+        if self.update_manager is None:
+            return
+        self.check_updates_button.setEnabled(False)
+        self.update_status_label.setText("Checking GitHub Releases for updates…")
+        self.update_manager.check_for_updates(manual=True)
+
+    def _on_update_status(self, message: str) -> None:
+        self.update_status_label.setText(message)
+
+    def _on_update_available(self, info: UpdateInfo) -> None:
+        self.update_status_label.setText(
+            f"Version {info.version} is available. Downloading and verifying it in the background…"
+        )
+
+    def _on_update_progress(self, percent: int, message: str) -> None:
+        progress = f"{max(0, min(100, int(percent)))}%" if percent > 0 else ""
+        self.update_status_label.setText(" — ".join(part for part in (message, progress) if part))
+
+    def _on_no_update(self, message: str) -> None:
+        self.check_updates_button.setEnabled(True)
+        self.update_status_label.setText(message)
+
+    def _on_update_error(self, message: str, manual: bool) -> None:
+        self.check_updates_button.setEnabled(True)
+        self.update_status_label.setText(message)
+        if manual:
+            QMessageBox.warning(self, "Update check", message)
+
+    def _on_update_ready(self, info: UpdateInfo) -> None:
+        self.check_updates_button.setEnabled(True)
+        self.restart_update_button.show()
+        self.update_status_label.setText(
+            f"Version {info.version} is ready. It will install after League Highlights fully exits."
+        )
+        if self.tray_icon.isVisible() and not self._update_ready_notified:
+            self._update_ready_notified = True
+            self.tray_icon.showMessage(
+                "League Highlights update ready",
+                f"Version {info.version} will install after the app exits.",
+                QSystemTrayIcon.MessageIcon.Information,
+                4500,
+            )
+
+    def _restart_to_update(self) -> None:
+        if self.update_manager is None or self.update_manager.pending_update is None:
+            QMessageBox.information(self, "League Highlights", "No staged update is ready yet.")
+            return
+        if self.controller.busy:
+            QMessageBox.information(
+                self,
+                "Update is waiting",
+                "A clip or export is still being processed. Try again after it finishes.",
+            )
+            return
+        if self.controller.recording:
+            result = QMessageBox.question(
+                self,
+                "Restart to update?",
+                "Recording will stop and the current rolling buffer will be discarded before the update installs.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if result != QMessageBox.StandardButton.Yes:
+                return
+        self._restart_after_update = True
+        self._exit_application()
+
+    def _launch_pending_update(self, restart: bool) -> None:
+        if self._update_launch_attempted or self.update_manager is None:
+            return
+        if self.update_manager.pending_update is None:
+            return
+        self._update_launch_attempted = True
+        if not self.update_manager.launch_pending_update(restart=restart):
+            self._update_launch_attempted = False
+            if restart:
+                QMessageBox.warning(
+                    self,
+                    "Update could not start",
+                    "The verified update remains staged. Exit normally and try again after checking the updater log.",
+                )
+
+    def _show_whats_new(self, force: bool = False) -> None:
+        if self._whats_new_dialog is not None and self._whats_new_dialog.isVisible():
+            self._whats_new_dialog.raise_()
+            return
+        if not force and self.config.last_seen_whats_new_version == APP_VERSION:
+            return
+        slides = notes_for_version(APP_VERSION)
+        if not slides:
+            return
+        dialog = WhatsNewDialog(self, APP_VERSION, slides)
+        self._whats_new_dialog = dialog
+        dialog.finished.connect(self._on_whats_new_closed)
+        dialog.open()
+
+    def _on_whats_new_closed(self, _result: int) -> None:
+        self.config.last_seen_whats_new_version = APP_VERSION
+        self.config.save_user_settings()
+        self._whats_new_dialog = None
+
     def _set_launch_with_windows(self, checked: bool) -> None:
         try:
             set_startup_enabled(bool(checked))
@@ -2161,6 +2338,12 @@ class MainWindow(QMainWindow):
             f"Saved clips preserve the recording profile • {smart_line} • clips grouped by game"
         )
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._whats_new_scheduled:
+            self._whats_new_scheduled = True
+            QTimer.singleShot(450, self._show_whats_new)
+
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
@@ -2173,6 +2356,7 @@ class MainWindow(QMainWindow):
         if self._force_exit:
             self.controller.shutdown()
             self.tray_icon.hide()
+            self._launch_pending_update(self._restart_after_update)
             event.accept()
             return
         if self.config.close_to_tray and self.tray_icon.isVisible():
@@ -2190,4 +2374,5 @@ class MainWindow(QMainWindow):
         self._force_exit = True
         self.controller.shutdown()
         self.tray_icon.hide()
+        self._launch_pending_update(False)
         event.accept()

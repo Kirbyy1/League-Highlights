@@ -38,6 +38,7 @@ class AppConfig:
     launch_with_windows: bool = False
     start_minimized: bool = False
     close_to_tray: bool = True
+    last_seen_whats_new_version: str = ""
     draw_mouse: bool = False
 
     # Discord export is opt-in and runs only after the user presses Export.
@@ -123,6 +124,7 @@ class AppConfig:
             "launch_with_windows",
             "start_minimized",
             "close_to_tray",
+            "last_seen_whats_new_version",
             "draw_mouse",
             "discord_mode",
             "discord_target_mb",
@@ -179,6 +181,8 @@ class AppConfig:
             self.start_minimized = False
         if not isinstance(self.close_to_tray, bool):
             self.close_to_tray = True
+        if not isinstance(self.last_seen_whats_new_version, str):
+            self.last_seen_whats_new_version = ""
         if not isinstance(self.system_audio_enabled, bool):
             self.system_audio_enabled = True
         if not isinstance(self.microphone_enabled, bool):

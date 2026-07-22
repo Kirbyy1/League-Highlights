@@ -24,4 +24,38 @@ if (-not (Test-Path $AppIcon)) { throw "Application icon is missing." }
     --collect-all pyaudiowpatch `
     main.py
 
+$UpdaterDist = Join-Path $PSScriptRoot "build\updater-dist"
+$UpdaterWork = Join-Path $PSScriptRoot "build\updater-work"
+$UpdaterSpec = Join-Path $PSScriptRoot "build\updater-spec"
+Remove-Item $UpdaterDist -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item $UpdaterWork -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item $UpdaterSpec -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $UpdaterDist, $UpdaterWork, $UpdaterSpec | Out-Null
+
+& $Python -m PyInstaller `
+    --noconfirm `
+    --clean `
+    --windowed `
+    --onefile `
+    --name "LeagueHighlightsUpdater" `
+    --distpath "$UpdaterDist" `
+    --workpath "$UpdaterWork" `
+    --specpath "$UpdaterSpec" `
+    updater.py
+
+Copy-Item `
+    (Join-Path $UpdaterDist "LeagueHighlightsUpdater.exe") `
+    (Join-Path $PSScriptRoot "dist\LeagueHighlights\LeagueHighlightsUpdater.exe") `
+    -Force
+
+& $Python (Join-Path $PSScriptRoot "scripts\make_release.py")
+$Version = (& $Python -c "from app.version import APP_VERSION; print(APP_VERSION)").Trim()
+$Iscc = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
+if ($Iscc) {
+    & $Iscc.Source "/DMyAppVersion=$Version" (Join-Path $PSScriptRoot "installer\LeagueHighlights.iss")
+} else {
+    Write-Host "Inno Setup was not found in PATH; the ZIP and update manifest were still created." -ForegroundColor Yellow
+}
+
 Write-Host "Build created in dist\LeagueHighlights" -ForegroundColor Green
+Write-Host "Release assets created in release\$Version" -ForegroundColor Green

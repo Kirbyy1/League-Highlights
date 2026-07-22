@@ -20,7 +20,7 @@ os.environ["QT_LOGGING_RULES"] = (
     else _silent_qt_media_rules
 )
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -28,6 +28,7 @@ from app.assets import icon_path
 from app.config import AppConfig
 from app.controller import RecorderController
 from app.logging_setup import configure_logging
+from app.services.update_manager import UpdateManager
 from app.ui.main_window import MainWindow
 
 
@@ -49,12 +50,15 @@ def main() -> int:
 
     try:
         controller = RecorderController(config)
-        window = MainWindow(config, controller)
+        update_manager = UpdateManager(config)
+        window = MainWindow(config, controller, update_manager)
         launched_at_startup = "--startup" in sys.argv
         if not (config.start_minimized or launched_at_startup):
             window.show()
         else:
             window.show_startup_notification()
+        if update_manager.can_self_update:
+            QTimer.singleShot(1800, update_manager.check_for_updates)
         return app.exec()
     except Exception as exc:  # last-resort startup guard
         logging.exception("Fatal startup error")

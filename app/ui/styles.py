@@ -1359,3 +1359,143 @@ QMenu#MainMenu::icon {
     padding-left: 5px;
 }
 '''
+
+# v51 updater, PyCharm geometry, manual hamburger popup, and What's New carousel
+APP_STYLE += r'''
+QFrame#TitleBrandBadge {
+    border-radius: 4px;
+}
+QFrame#StatusCard, QFrame#SettingsSection, QFrame#StorageCard, QFrame#HintCard,
+QFrame#GameCard, QFrame#ClipCard, QFrame#InfoCard {
+    border-radius: 5px;
+}
+QFrame#GameCardCompact {
+    border-radius: 3px;
+}
+QPushButton#NavButton,
+QPushButton#PrimaryButton, QPushButton#DarkButton, QPushButton#DangerButton,
+QPushButton#SaveClipButton, QPushButton#HotkeyButton, QPushButton#QuietButton,
+QPushButton#SettingsTab {
+    border-radius: 4px;
+}
+QToolButton#TitleBackButton, QToolButton#MainMenuButton,
+QToolButton#HeaderIconButton, QToolButton#SidebarIconButton,
+QToolButton#OverlayActionButton, QToolButton#CardAction, QToolButton#CardPlay,
+QToolButton#RatingButton {
+    border-radius: 4px;
+}
+QComboBox, QDoubleSpinBox {
+    border-radius: 4px;
+}
+QCheckBox::indicator {
+    border-radius: 3px;
+}
+QMenu#MainMenu {
+    border-radius: 4px;
+    padding: 3px;
+}
+QMenu#MainMenu::item {
+    border-radius: 3px;
+}
+QToolButton#MainMenuButton:pressed,
+QToolButton#MainMenuButton::menu-button,
+QToolButton#MainMenuButton::menu-button:hover,
+QToolButton#MainMenuButton::menu-button:pressed {
+    background: transparent;
+    border: none;
+}
+
+QFrame#WhatsNewOverlay {
+    background: rgba(4, 7, 10, 150);
+    border: none;
+}
+QFrame#WhatsNewCard {
+    background: #11161C;
+    border: 1px solid #3A4A36;
+    border-radius: 6px;
+}
+QLabel#WhatsNewHeader {
+    color: #E9EEF3;
+    font-size: 12px;
+    font-weight: 650;
+    letter-spacing: 0.7px;
+}
+QFrame#WhatsNewHero {
+    background: #080C11;
+    border: 1px solid #263128;
+    border-radius: 4px;
+}
+QLabel#WhatsNewEyebrow {
+    color: #7F8B97;
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 1px;
+}
+QLabel#WhatsNewTitle {
+    color: #F3F6F9;
+    font-size: 20px;
+    font-weight: 680;
+}
+QLabel#WhatsNewDescription {
+    color: #9CA7B3;
+    font-size: 13px;
+    padding: 0 42px;
+}
+QLabel#WhatsNewBullets {
+    color: #B6C0CA;
+    background: #0D1319;
+    border: 1px solid #202B35;
+    border-radius: 4px;
+    padding: 10px 14px;
+}
+QLabel#WhatsNewDot {
+    min-width: 12px;
+    max-width: 12px;
+    color: #44505C;
+    font-size: 9px;
+}
+QLabel#WhatsNewDot[active="true"] {
+    color: #63DE8C;
+}
+QPushButton#WhatsNewArrow {
+    min-width: 34px;
+    max-width: 34px;
+    min-height: 32px;
+    max-height: 32px;
+    background: #171F27;
+    border: 1px solid #2D3944;
+    border-radius: 4px;
+    color: #DCE3EA;
+    font-size: 22px;
+}
+QPushButton#WhatsNewArrow:hover {
+    background: #1D2832;
+    border-color: #45525E;
+}
+QPushButton#WhatsNewArrow:disabled {
+    color: #4D5862;
+    background: #11171D;
+    border-color: #202932;
+}
+QPushButton#WhatsNewPrimary {
+    min-height: 34px;
+    padding: 0 16px;
+    background: #58D889;
+    border: 1px solid #6BE697;
+    border-radius: 4px;
+    color: #07110B;
+    font-weight: 650;
+}
+QPushButton#WhatsNewPrimary:hover {
+    background: #68E397;
+}
+QFrame#WhatsNewDivider {
+    background: #242D35;
+    border: none;
+}
+QLabel#WhatsNewFooter {
+    color: #B8C1CA;
+    font-size: 12px;
+}
+'''
+
