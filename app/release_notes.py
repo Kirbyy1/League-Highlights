@@ -86,6 +86,47 @@ _RELEASE_NOTES: dict[str, tuple[dict[str, object], ...]] = {
             ),
         },
     ),
+    "1.0.5": (
+        {
+            "eyebrow": "SMART HIGHLIGHTS V2",
+            "title": "Better fights, fewer duplicate clips",
+            "description": (
+                "Automatic highlights now group related combat events into one complete play "
+                "instead of saving several overlapping clips from the same fight."
+            ),
+            "bullets": (
+                "Related kills, assists, and objective steals are grouped into one highlight.",
+                "Adaptive timing adds more context to longer and more valuable fights.",
+                "Overlapping automatic highlights are suppressed before saving.",
+            ),
+        },
+        {
+            "eyebrow": "PERFORMANCE",
+            "title": "Lighter during long sessions",
+            "description": (
+                "Background work now scales down when League or the application is inactive, "
+                "while recorded matches and previews are loaded only when needed."
+            ),
+            "bullets": (
+                "League and metadata polling slow down while no match is active.",
+                "Match cards load progressively instead of loading the full library at once.",
+                "Unchanged clip metadata and filmstrip previews are cached.",
+            ),
+        },
+        {
+            "eyebrow": "RELIABILITY",
+            "title": "Safer recording and exporting",
+            "description": (
+                "Recording, clip saving, temporary storage, and hardware encoding now include "
+                "additional safeguards and recovery behavior."
+            ),
+            "bullets": (
+                "Healthy hardware encoders are preferred with automatic fallback after failures.",
+                "Saved highlights are validated before appearing in the library.",
+                "Rolling segments, temporary files, and concurrent FFmpeg jobs are bounded.",
+            ),
+        },
+    ),
 }
 
 
