@@ -1,0 +1,1 @@
+"""League Highlights application package."""

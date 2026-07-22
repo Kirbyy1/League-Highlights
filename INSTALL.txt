@@ -1,0 +1,15 @@
+League Highlights v39 patch installation
+
+1. Close League Highlights completely, including the system-tray process.
+2. Extract this ZIP.
+3. Copy every included file and folder over your current v38 project.
+4. Choose “Replace files in the destination”.
+5. Keep your existing .venv, FFmpeg folder, settings, clips, and thumbnails.
+6. Start the app normally.
+
+Migration:
+- No database conversion or package installation is required.
+- Existing clips and Smart Trim metadata remain compatible.
+- No Discord connection is required to export a Discord-ready file.
+- A webhook setup prompt appears only if the user explicitly chooses to send.
+- The provided logo assets are included under app/assets.
