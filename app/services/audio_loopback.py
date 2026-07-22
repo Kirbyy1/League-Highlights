@@ -9,7 +9,12 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import pyaudiowpatch as pyaudio
+import os
+
+if os.name == "nt":     # Windows
+    import pyaudiowpatch as pyaudio
+else:                   # Linux/macOS
+    import pyaudio
 
 from app.config import AppConfig
 
