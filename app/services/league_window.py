@@ -6,12 +6,17 @@ from collections.abc import Callable
 import psutil
 import re
 
-import win32api
-import win32con
-import win32gui
-import win32process
+import os
 
 from app.models import LeagueWindowInfo
+
+IS_WINDOWS = os.name == "nt"
+if IS_WINDOWS:
+    import win32api
+    import win32con
+    import win32gui
+    import win32process
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -25,6 +30,9 @@ class LeagueWindowDetector:
     """Finds the visible League game window, not the launcher/client window."""
 
     def find(self) -> LeagueWindowInfo | None:
+        if not IS_WINDOWS:
+            return None
+
         candidates: list[LeagueWindowInfo] = []
 
         def enum_callback(hwnd: int, _: object) -> bool:
@@ -45,6 +53,9 @@ class LeagueWindowDetector:
 
     @staticmethod
     def _inspect_window(hwnd: int) -> LeagueWindowInfo | None:
+        if not IS_WINDOWS:
+            return None
+
         if not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
             return None
 

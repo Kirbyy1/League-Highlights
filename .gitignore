@@ -24,3 +24,7 @@ release/
 SHA256SUMS.txt
 update.json
 .patch_backups/
+
+*.vim
+*.nvim
+
