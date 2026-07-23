@@ -810,4 +810,101 @@ QLabel#LiveStackedTagMore {
 }
 
 
+
+
+/* ============================================================
+   UI V23 — sharp, professional, symbol-first override
+   ============================================================ */
+
+* {
+    font-family: "Segoe UI Variable Text", "Segoe UI";
+}
+
+QFrame#TitleBrandBadge,
+QFrame#Sidebar,
+QFrame#ContentPanel,
+QFrame#StatusCard,
+QFrame#SettingsSection,
+QFrame#StorageCard,
+QFrame#HintCard,
+QFrame#GameCard,
+QFrame#GameCardCompact,
+QFrame#ClipCard,
+QFrame#InfoCard,
+QFrame#SettingsTabs,
+QFrame#SettingsSideNavigation,
+QFrame#LibraryToolbar,
+QFrame#LiveMatchStatusBar,
+QFrame#LiveApiBanner,
+QFrame#LiveTeamSection,
+QFrame#LivePlayerCard,
+QFrame#BottomStatusBar,
+QFrame#ClipToastRoot,
+QPushButton,
+QToolButton,
+QComboBox,
+QLineEdit,
+QDoubleSpinBox,
+QProgressBar,
+QLabel#LiveDataStatus,
+QLabel#InfoBanner,
+QLabel#VictoryChip,
+QLabel#DefeatChip,
+QLabel#NeutralChip,
+QLabel#MetaChip,
+QLabel#ScoreChip,
+QLabel#ReadyChip,
+QToolTip {
+    border-radius: 3px;
+}
+
+QCheckBox::indicator,
+QSlider::handle:horizontal,
+QScrollBar::handle:vertical,
+QScrollBar::handle:horizontal {
+    border-radius: 3px;
+}
+
+QPushButton#NavButton {
+    min-width: 38px;
+    max-width: 38px;
+    min-height: 42px;
+    max-height: 42px;
+    padding: 0;
+    text-align: center;
+    border-radius: 3px;
+}
+
+QToolButton#MainMenuButton,
+QToolButton#MainMenuButton:hover,
+QToolButton#MainMenuButton:pressed,
+QToolButton#MainMenuButton:checked {
+    background: transparent;
+    border: none;
+    outline: none;
+    border-radius: 3px;
+}
+
+QMenu#MainMenu,
+QMenu {
+    border: none;
+    outline: none;
+    border-radius: 3px;
+    padding: 4px;
+}
+
+QMenu::item {
+    border: none;
+    border-radius: 3px;
+    padding: 7px 24px 7px 10px;
+}
+
+QComboBox QAbstractItemView,
+QListView,
+QTreeView,
+QTableView {
+    outline: none;
+    border-radius: 3px;
+}
+
 """

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QRectF, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QPainter
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -30,6 +30,85 @@ from app.services.recording_policy import (
 )
 from app.ui.live_match_page import LiveMatchPage
 from app.ui.main_window import MainWindow, RoundedThumbnail, _app_icon
+
+
+UI_POLISH_BUILD = "V23-REPLACEMENT-FILES"
+
+
+def _live_match_icon(color: str = "#D7DFE8") -> QIcon:
+    """Distinct professional focus/live symbol for Live Match."""
+
+    pixmap = QPixmap(20, 20)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    pen = QPen(QColor(color), 1.45)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    painter.drawLine(4.0, 7.0, 4.0, 4.0)
+    painter.drawLine(4.0, 4.0, 7.0, 4.0)
+    painter.drawLine(13.0, 4.0, 16.0, 4.0)
+    painter.drawLine(16.0, 4.0, 16.0, 7.0)
+    painter.drawLine(4.0, 13.0, 4.0, 16.0)
+    painter.drawLine(4.0, 16.0, 7.0, 16.0)
+    painter.drawLine(13.0, 16.0, 16.0, 16.0)
+    painter.drawLine(16.0, 13.0, 16.0, 16.0)
+    painter.drawEllipse(QRectF(7.25, 7.25, 5.5, 5.5))
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(color))
+    painter.drawEllipse(QRectF(9.0, 9.0, 2.0, 2.0))
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _sharp_thumbnail_paint_event(widget: RoundedThumbnail, event) -> None:
+    """Paint all highlight thumbnails with a restrained 3 px radius."""
+
+    painter = QPainter(widget)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    rect = QRectF(widget.rect())
+    path = QPainterPath()
+    path.addRoundedRect(rect, 3.0, 3.0)
+    painter.setClipPath(path)
+    painter.fillRect(widget.rect(), QColor("#151D26"))
+
+    if not widget.pixmap.isNull():
+        scaled = widget.pixmap.scaled(
+            widget.size(),
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        x = (widget.width() - scaled.width()) // 2
+        y = (widget.height() - scaled.height()) // 2
+        painter.drawPixmap(x, y, scaled)
+    else:
+        painter.setPen(QColor("#73808E"))
+        painter.drawText(widget.rect(), Qt.AlignmentFlag.AlignCenter, "No preview")
+
+    badge_width = 48
+    badge_height = 23
+    badge = QRectF(
+        widget.width() - badge_width - 8,
+        widget.height() - badge_height - 8,
+        badge_width,
+        badge_height,
+    )
+    painter.setClipping(False)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(5, 9, 14, 220))
+    painter.drawRoundedRect(badge, 3.0, 3.0)
+    painter.setPen(QColor("#F4F7FA"))
+    painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, widget.duration_text)
+
+
+def _install_sharp_thumbnail_painting() -> None:
+    RoundedThumbnail.paintEvent = _sharp_thumbnail_paint_event
 
 
 class MatchSummaryThumbnail(RoundedThumbnail):
@@ -89,7 +168,7 @@ class MatchSummaryThumbnail(RoundedThumbnail):
         if result in {"Victory", "Defeat"}:
             badge = QRectF(8, 8, 58, 21)
             painter.setBrush(QColor(5, 9, 14, 215))
-            painter.drawRoundedRect(badge, 6, 6)
+            painter.drawRoundedRect(badge, 3, 3)
             painter.setPen(QColor("#55E891" if result == "Victory" else "#FF6672"))
             painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, result.upper())
 
@@ -98,9 +177,14 @@ class EnhancedMainWindow(MainWindow):
     """Presentation and navigation enhancements layered over the stable app."""
 
     def __init__(self, config, controller, update_manager=None) -> None:
+        _install_sharp_thumbnail_painting()
         self._recording_seconds = 0
         self.recording_policy = install_recording_policy(controller, config)
         super().__init__(config, controller, update_manager)
+        self.sidebar.setFixedWidth(58)
+        self.highlights_nav.setText("")
+        self.highlights_nav.setToolTip("Highlights")
+        self.highlights_nav.setProperty("compact", True)
 
         self._install_live_match_page()
         self._add_recording_policy_settings()
@@ -143,9 +227,9 @@ class EnhancedMainWindow(MainWindow):
         self.live_match_page.settings_requested.connect(self._open_riot_api_settings)
         self.live_match_page_index = self.pages.addWidget(self.live_match_page)
 
-        self.live_match_nav = QPushButton("Live Match")
+        self.live_match_nav = QPushButton("")
         self.live_match_nav.setObjectName("NavButton")
-        self.live_match_nav.setIcon(_app_icon("highlights"))
+        self.live_match_nav.setIcon(_live_match_icon())
         self.live_match_nav.setIconSize(self.highlights_nav.iconSize())
         self.live_match_nav.setToolTip("Live Match")
         self.live_match_nav.clicked.connect(
@@ -170,7 +254,9 @@ class EnhancedMainWindow(MainWindow):
     def _set_sidebar_compact(self, compact: bool) -> None:
         super()._set_sidebar_compact(compact)
         if hasattr(self, "live_match_nav"):
-            self.live_match_nav.setText("" if compact else "Live Match")
+            self.sidebar.setFixedWidth(58)
+            self.highlights_nav.setText("")
+            self.live_match_nav.setText("")
             self.live_match_nav.setProperty("compact", compact)
             self.live_match_nav.style().unpolish(self.live_match_nav)
             self.live_match_nav.style().polish(self.live_match_nav)
