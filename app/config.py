@@ -34,12 +34,22 @@ class AppConfig:
     microphone_device: str = ""
     microphone_volume: int = 100
 
+    # Master recording control and queue filter. Live Match analysis remains
+    # available even when highlight recording is disabled.
+    recording_enabled: bool = True
+    recording_scope: str = "all"  # all, exclude_aram, ranked_only
+
     auto_start: bool = True
     launch_with_windows: bool = False
     start_minimized: bool = False
     close_to_tray: bool = True
     last_seen_whats_new_version: str = ""
     draw_mouse: bool = False
+
+    # Live Match uses each user's own Riot development/personal API key. The key
+    # is stored only in the local settings file and is never committed to GitHub.
+    riot_api_key: str = ""
+    riot_platform: str = "euw1"
 
     # Discord export is opt-in and runs only after the user presses Export.
     # The original full-quality highlight is never replaced. The older profile
@@ -66,7 +76,6 @@ class AppConfig:
     # decides whether routine moments should be kept.
     smart_highlights_enabled: bool = True
     smart_sensitivity: str = "balanced"  # strict, balanced, save_more
-
 
     # Windows virtual-key code and optional modifier names used by the global
     # GetAsyncKeyState poller. F8 is the safe default.
@@ -120,12 +129,16 @@ class AppConfig:
             "microphone_enabled",
             "microphone_device",
             "microphone_volume",
+            "recording_enabled",
+            "recording_scope",
             "auto_start",
             "launch_with_windows",
             "start_minimized",
             "close_to_tray",
             "last_seen_whats_new_version",
             "draw_mouse",
+            "riot_api_key",
+            "riot_platform",
             "discord_mode",
             "discord_target_mb",
             "discord_target_mib",
@@ -175,6 +188,13 @@ class AppConfig:
             self.quality = 22
         if self.audio_bitrate_kbps not in {96, 128, 160, 192}:
             self.audio_bitrate_kbps = 160
+        if not isinstance(self.recording_enabled, bool):
+            self.recording_enabled = True
+        if (
+            not isinstance(self.recording_scope, str)
+            or self.recording_scope not in {"all", "exclude_aram", "ranked_only"}
+        ):
+            self.recording_scope = "all"
         if not isinstance(self.launch_with_windows, bool):
             self.launch_with_windows = False
         if not isinstance(self.start_minimized, bool):
@@ -195,6 +215,17 @@ class AppConfig:
             self.system_audio_volume = 100
         if not isinstance(self.microphone_volume, int) or not 0 <= self.microphone_volume <= 200:
             self.microphone_volume = 100
+        if not isinstance(self.riot_api_key, str):
+            self.riot_api_key = ""
+        self.riot_api_key = self.riot_api_key.strip()
+        allowed_platforms = {
+            "br1", "eun1", "euw1", "jp1", "kr", "la1", "la2", "me1",
+            "na1", "oc1", "ph2", "ru", "sg2", "th2", "tr1", "tw2", "vn2",
+        }
+        if not isinstance(self.riot_platform, str) or self.riot_platform.casefold() not in allowed_platforms:
+            self.riot_platform = "euw1"
+        else:
+            self.riot_platform = self.riot_platform.casefold()
         # The obsolete automatic Discord mode stays disabled. v38 uses an explicit
         # Smart Trim export action and always keeps the original recording.
         self.discord_mode = False
