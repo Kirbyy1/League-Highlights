@@ -25,7 +25,7 @@ from app.services.live_match_client_asset_provider import LiveMatchClientAssetPr
 from app.services.live_match_scout import LiveMatchScout
 
 
-LIVE_MATCH_UI_BUILD = "V16-ENCOUNTER-CHAMPION-TOOLTIPS"
+LIVE_MATCH_UI_BUILD = "V21-UNCAPPED-STRICT-LARGE-SAMPLE-TAGS"
 
 _ROLE_NAMES = {
     "TOP": "Top",
@@ -40,7 +40,6 @@ _ROLE_NAMES = {
 class PlayerScoutCard(QFrame):
     """Compact five-across player card with details moved into tooltips."""
 
-    MAX_VISIBLE_TAGS = 3
 
     def __init__(self, player: dict[str, Any]) -> None:
         super().__init__()
@@ -56,9 +55,11 @@ class PlayerScoutCard(QFrame):
 
         self.setObjectName("LiveStackedPlayerCard")
         self.setMinimumWidth(170)
-        self.setMinimumHeight(180)
-        self.setMaximumHeight(194)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(192)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -148,9 +149,11 @@ class PlayerScoutCard(QFrame):
         rank_row.addLayout(rank_texts, 1)
         root.addLayout(rank_row)
 
-        self.tags_row = QHBoxLayout()
+        # Full-width vertical chips keep every tag readable on five-across
+        # cards.  The former single horizontal row clipped longer labels.
+        self.tags_row = QVBoxLayout()
         self.tags_row.setContentsMargins(0, 0, 0, 0)
-        self.tags_row.setSpacing(4)
+        self.tags_row.setSpacing(3)
         root.addLayout(self.tags_row)
 
         root.addStretch()
@@ -269,7 +272,14 @@ class PlayerScoutCard(QFrame):
         if role_name == "Unknown role":
             role_name = str(stats.get("main_role_name", "Unknown") or "Unknown")
 
-        self.role_label.setText(role_name)
+        lane_opponent = stats.get("lane_opponent", {})
+        if isinstance(lane_opponent, dict) and lane_opponent.get("opponent_champion"):
+            opponent_champion = str(lane_opponent.get("opponent_champion", "Unknown") or "Unknown")
+            self.role_label.setText(f"{role_name} · vs {opponent_champion}")
+            self.role_label.setToolTip(str(lane_opponent.get("tooltip", "") or ""))
+        else:
+            self.role_label.setText(role_name)
+            self.role_label.setToolTip("")
         self.set_role_icon(role_code)
 
         tier = str(stats.get("tier", "UNRANKED") or "UNRANKED").upper()
@@ -317,23 +327,9 @@ class PlayerScoutCard(QFrame):
         else:
             ranked_record_text = "No ranked Solo/Duo games"
 
-        if state == "partial":
-            self.quick_line.setText(ranked_record_text)
-            self._set_tags(
-                [
-                    {
-                        "text": "ANALYSING",
-                        "tone": "neutral",
-                        "tooltip": "Rank, level and mastery are loaded. Recent-match analysis is starting.",
-                    }
-                ]
-            )
-            self._update_card_tooltip()
-            return
-
-        if state == "fast":
-            self.quick_line.setText(ranked_record_text)
-            self._set_tags(list(stats.get("tags", ())))
+        if state in {"partial", "fast"}:
+            self.quick_line.setText("Analysing ranked history")
+            self._set_tags([])
             self._update_card_tooltip()
             return
 
@@ -375,34 +371,19 @@ class PlayerScoutCard(QFrame):
                     }
                 )
 
-        visible = normalized[: self.MAX_VISIBLE_TAGS]
-        hidden = normalized[self.MAX_VISIBLE_TAGS :]
-
-        if hidden and len(visible) == self.MAX_VISIBLE_TAGS:
-            hidden.insert(0, visible.pop())
-
-        for tag in visible:
+        for tag in normalized:
             chip = QLabel(tag["text"])
             chip.setObjectName("LiveStackedTag")
             chip.setProperty("tone", tag["tone"])
             chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            chip.setWordWrap(True)
+            chip.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Minimum,
+            )
             chip.setToolTip(tag["tooltip"])
             self.tags_row.addWidget(chip)
 
-        if hidden:
-            more = QLabel(f"+{len(hidden)}")
-            more.setObjectName("LiveStackedTagMore")
-            more.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            more.setToolTip(
-                "<b>More scouting tags</b><br>"
-                + "<br>".join(
-                    f"<b>{escape(tag['text'])}</b> — {escape(tag['tooltip'])}"
-                    for tag in hidden
-                )
-            )
-            self.tags_row.addWidget(more)
-
-        self.tags_row.addStretch()
 
     def _update_card_tooltip(self) -> None:
         stats = self.latest_stats
@@ -470,6 +451,22 @@ class PlayerScoutCard(QFrame):
                     f" · team assignment {escape(assignment_confidence)} confidence"
                 )
             lines.append(role_text)
+
+        lane_opponent = stats.get("lane_opponent", {})
+        if isinstance(lane_opponent, dict) and lane_opponent.get("opponent_name"):
+            opponent_name = escape(str(lane_opponent.get("opponent_name", "Unknown") or "Unknown"))
+            opponent_champion = escape(str(lane_opponent.get("opponent_champion", "Unknown") or "Unknown"))
+            opponent_rank = escape(str(lane_opponent.get("opponent_rank", "Unranked") or "Unranked"))
+            edge = escape(str(lane_opponent.get("edge", "Even profile comparison") or "Even profile comparison"))
+            delta = float(lane_opponent.get("strength_delta", 0) or 0)
+            lines.append(
+                f"<b>Lane profile:</b> vs {opponent_name} on {opponent_champion} · "
+                f"{opponent_rank} · {edge} ({delta:+.1f})"
+            )
+            lines.append(
+                "<i>Profile comparison uses rank, role familiarity, mastery and recent ranked form; "
+                "it is not a champion counter prediction.</i>"
+            )
         mastery_level = int(stats.get("mastery_level", 0) or 0)
         mastery_points = int(stats.get("mastery_points", 0) or 0)
         mastery_rank = stats.get("mastery_rank")
@@ -490,20 +487,44 @@ class PlayerScoutCard(QFrame):
 
         timeline_games = int(stats.get("timeline_games", 0) or 0)
         if timeline_games:
+            timeline_parts = [
+                f"{float(stats.get('lead_at_10_rate', 0) or 0):.0f}% ahead at 10",
+                f"gold diff {float(stats.get('avg_gold_diff_at_10', 0) or 0):+.0f}",
+                f"CS diff {float(stats.get('avg_cs_diff_at_10', 0) or 0):+.1f}",
+                f"{float(stats.get('early_death_rate', 0) or 0):.0f}% early-death games",
+            ]
+            assigned_role = str(stats.get("assigned_role", "") or stats.get("inferred_role", "") or "")
+            if assigned_role == "JUNGLE":
+                timeline_parts.extend(
+                    [
+                        f"pre-5 gank {float(stats.get('gank_before_5_rate', 0) or 0):.0f}%",
+                        f"jungle CS@6 {float(stats.get('avg_jungle_cs_at_6', 0) or 0):.0f}",
+                    ]
+                )
+            elif assigned_role in {"MIDDLE", "UTILITY"}:
+                timeline_parts.append(
+                    f"early roam {float(stats.get('early_roam_rate', 0) or 0):.0f}%"
+                )
             lines.append(
-                "<b>Timeline sample:</b> "
-                f"{float(stats.get('lead_at_10_rate', 0) or 0):.0f}% ahead at 10 · "
-                f"{float(stats.get('early_death_rate', 0) or 0):.0f}% early-death games"
+                f"<b>Role timeline ({timeline_games}):</b> " + " · ".join(timeline_parts)
             )
 
         encounter_count = int(stats.get("encounter_count", 0) or 0)
         if encounter_count:
+            record_wins = int(stats.get("encounter_wins", 0) or 0)
+            record_losses = int(stats.get("encounter_losses", 0) or 0)
+            record_text = (
+                f" · your record {record_wins}W-{record_losses}L"
+                if record_wins + record_losses
+                else ""
+            )
             lines.append(
                 "<b>Previous encounters:</b> "
                 f"tracked ally {int(stats.get('encounter_local_ally_count', 0) or 0)}, "
                 f"tracked enemy {int(stats.get('encounter_local_enemy_count', 0) or 0)}; "
                 f"recent ranked ally {int(stats.get('encounter_ranked_ally_count', 0) or 0)}, "
                 f"recent ranked enemy {int(stats.get('encounter_ranked_enemy_count', 0) or 0)}"
+                f"{record_text}"
             )
 
             encounter_history = list(stats.get("encounter_history", ()))
@@ -536,20 +557,41 @@ class PlayerScoutCard(QFrame):
                         .astimezone()
                         .strftime("%Y-%m-%d")
                     )
+                result_text = escape(str(item.get("result", "") or ""))
+                my_kda = escape(str(item.get("my_kda", "") or ""))
+                their_kda = escape(str(item.get("their_kda", "") or ""))
+                outcome = f" · {result_text}" if result_text else ""
+                if my_kda or their_kda:
+                    outcome += f" · KDA {my_kda or '—'} vs {their_kda or '—'}"
                 lines.append(
                     f"<b>{relation} before:</b> you played {my_champion}; "
-                    f"they played {their_champion} · {escape(source_text)}"
+                    f"they played {their_champion}{outcome} · {escape(source_text)}"
                     f"{when_text}"
                 )
 
         if premades:
-            premade_text = "<b>Premade with:</b> " + escape(", ".join(premades))
+            role_pair = str(stats.get("premade_role_pair", "") or "Premade")
+            premade_text = f"<b>{escape(role_pair.title())} with:</b> " + escape(", ".join(premades))
             together = int(stats.get("premade_games_together", 0) or 0)
             together_wr = stats.get("premade_win_rate")
+            sessions = int(stats.get("premade_sessions", 0) or 0)
+            consecutive = int(stats.get("premade_consecutive_games", 0) or 0)
+            confidence = str(stats.get("premade_confidence", "") or "")
+            confidence_score = int(stats.get("premade_confidence_score", 0) or 0)
             if together:
-                premade_text += f" · {together} recent games"
+                evidence_scope = str(stats.get("premade_evidence_scope", "pair") or "pair")
+                if evidence_scope == "strongest_pair":
+                    premade_text += f" · {together} verified games on strongest pair"
+                else:
+                    premade_text += f" · {together} verified recent games"
+            if sessions:
+                premade_text += f" · {sessions} session(s)"
+            if consecutive >= 2:
+                premade_text += f" · {consecutive} consecutive"
             if together_wr is not None:
                 premade_text += f" · {float(together_wr):.0f}% WR together"
+            if confidence:
+                premade_text += f" · {escape(confidence)} confidence ({confidence_score}/100)"
             lines.append(premade_text)
 
         percentiles = dict(stats.get("local_percentiles", {}) or {})
@@ -662,6 +704,7 @@ class LiveMatchPage(QFrame):
         self.config = config
         self.setObjectName("ContentPanel")
         self._cards: dict[str, PlayerScoutCard] = {}
+        self._roster_signature = ""
 
         self.icon_provider = ChampionIconProvider(self)
         self.icon_provider.icon_ready.connect(self._apply_champion_icon)
@@ -761,15 +804,44 @@ class LiveMatchPage(QFrame):
         elif state in {"ready", "loading", "loading_screen", "champ_select"} and self.config.riot_api_key.strip():
             self.api_banner.hide()
 
+    @staticmethod
+    def _payload_roster_signature(payload: dict[str, Any]) -> str:
+        parts: list[str] = []
+        for player in payload.get("players", ()):
+            if not isinstance(player, dict):
+                continue
+            team = str(player.get("team", "") or "").upper()
+            champion = normalize_champion_name(
+                str(player.get("champion", "") or "Unknown")
+            )
+            identity = " ".join(
+                str(
+                    player.get("riot_id", "")
+                    or player.get("game_name", "")
+                    or ""
+                ).strip().casefold().split()
+            )
+            parts.append(f"{team}:{identity or champion}:{champion}")
+        return "|".join(sorted(parts))
+
     def set_roster(self, payload: dict[str, Any]) -> None:
         allies = list(payload.get("allies", ()))
         enemies = list(payload.get("enemies", ()))
-        self._cards.clear()
 
         if not allies and not enemies:
+            self._roster_signature = ""
+            self._cards.clear()
             self._show_empty_state()
             return
 
+        signature = self._payload_roster_signature(payload)
+        if signature and signature == self._roster_signature and self._cards:
+            # Repeated polls, manual refreshes and the Spectator -> port 2999
+            # hand-off must not destroy and recreate the ten existing cards.
+            return
+
+        self._roster_signature = signature
+        self._cards.clear()
         self.allies_section.add_players(
             [self._create_card(player) for player in allies]
         )
@@ -780,6 +852,17 @@ class LiveMatchPage(QFrame):
     def _create_card(self, player: dict[str, Any]) -> PlayerScoutCard:
         card = PlayerScoutCard(player)
         self._cards[card.player_key] = card
+        riot_id_alias = " ".join(
+            str(
+                player.get("riot_id", "")
+                or player.get("game_name", "")
+                or ""
+            ).strip().casefold().split()
+        )
+        if riot_id_alias:
+            # Spectator profiles are keyed by PUUID while port 2999 profiles are
+            # keyed by Riot ID. Both aliases target the same persistent card.
+            self._cards[riot_id_alias] = card
 
         if not self.config.riot_api_key.strip():
             card.set_waiting_for_key()

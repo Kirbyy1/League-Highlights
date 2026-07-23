@@ -22,6 +22,21 @@ from PySide6.QtCore import QObject, QStandardPaths, QTimer, Signal
 from app.config import AppConfig
 from app.services.lcu_game_detector import LeagueClientConnection
 from app.services.riot_rate_limiter import RiotRateLimiter
+from app.services.live_match_algorithms import (
+    champion_intelligence_tags,
+    derive_session_metrics,
+    filter_previous_encounters,
+    make_evidence_tag,
+    matchup_tag,
+    most_valid_tags,
+    pair_lane_opponents,
+    premade_pair_confidence,
+    premade_role_label,
+    prioritize_tags,
+    role_timeline_tags,
+    session_tags,
+    summarize_encounters,
+)
 from app.services.live_match_intelligence import (
     ChampionCatalog,
     EncounterStore,
@@ -82,7 +97,7 @@ class _CacheEntry:
     payload: dict[str, Any]
 
 
-LIVE_MATCH_PATCH_BUILD = "V16-ENCOUNTER-CHAMPION-TOOLTIPS"
+LIVE_MATCH_PATCH_BUILD = "V21-UNCAPPED-STRICT-LARGE-SAMPLE-TAGS"
 
 
 class LiveMatchScout(QObject):
@@ -112,6 +127,8 @@ class LiveMatchScout(QObject):
         self._busy = False
         self._generation = 0
         self._last_roster_signature = ""
+        self._last_completed_signature = ""
+        self._pending_encounter_game: dict[str, Any] | None = None
         self._player_cache: dict[tuple[str, str, str], _CacheEntry] = {}
         self._match_cache: dict[str, dict[str, Any]] = {}
         self._timeline_cache: dict[str, dict[str, Any]] = {}
@@ -168,6 +185,8 @@ class LiveMatchScout(QObject):
     def update_credentials(self) -> None:
         self._player_cache.clear()
         self._last_roster_signature = ""
+        self._last_completed_signature = ""
+        self._pending_encounter_game = None
         self._spectator_roster_cache = {}
         self._spectator_roster_cached_at = 0.0
         self._riot_limiter.reset()
@@ -207,6 +226,9 @@ class LiveMatchScout(QObject):
 
                 # Keep an existing loading-screen roster visible during a short
                 # Spectator-v5 delay instead of flashing back to an empty state.
+                if not loading_phase:
+                    self._flush_pending_encounters()
+                    self._last_completed_signature = ""
                 if not loading_phase or not self._last_roster_signature:
                     self._last_roster_signature = ""
                     self.roster_changed.emit(roster)
@@ -235,21 +257,25 @@ class LiveMatchScout(QObject):
 
             self.poll_interval_changed.emit(self.READY_POLL_INTERVAL_MS)
 
-            signature = (
-                str(int(roster.get("game_started_at", 0) or 0))
-                + "|"
-                + "|".join(
-                    sorted(
-                        str(player.get("player_key", ""))
-                        for player in roster["players"]
-                    )
-                )
-            )
-            if force or signature != self._last_roster_signature:
-                if signature != self._last_roster_signature:
+            signature = self._stable_roster_signature(roster)
+            roster_changed = signature != self._last_roster_signature
+            if force or roster_changed:
+                if roster_changed:
+                    if (
+                        self._pending_encounter_game
+                        and str(self._pending_encounter_game.get("signature", ""))
+                        != signature
+                    ):
+                        self._flush_pending_encounters()
                     self._player_cache.clear()
+                    self._last_completed_signature = ""
                 self._last_roster_signature = signature
                 self.roster_changed.emit(roster)
+            elif self._analysis_is_current(signature, force):
+                # Keep the already populated cards untouched.  Port 2999 taking
+                # over from Spectator no longer rebuilds all ten cards midgame.
+                self.status_changed.emit("ready", "Live match ready — analysis cached")
+                return
 
             if not api_key:
                 self.status_changed.emit(
@@ -303,7 +329,6 @@ class LiveMatchScout(QObject):
                         stats = {"state": "error", "message": str(exc)}
 
                     profiles[player_key] = stats
-                    self.player_stats_changed.emit(player_key, stats)
                     completed += 1
                     self.status_changed.emit(
                         "loading",
@@ -313,6 +338,10 @@ class LiveMatchScout(QObject):
             # Team-wide role assignment prevents impossible results such as
             # three mids on one team when the Live Client leaves positions empty.
             self._assign_team_roles(roster, profiles)
+
+            # Pair assigned roles across teams and compare only historical
+            # player profiles. This is not champion-counter advice.
+            self._apply_lane_matchups(roster, profiles)
 
             # Shared match history is used conservatively for premade groups.
             self._apply_premade_groups(roster, profiles)
@@ -325,12 +354,26 @@ class LiveMatchScout(QObject):
             # enabled after enough profiles have been collected.
             self._record_local_baselines(profiles)
 
+            # Apply every finding that independently clears the strict large-sample
+            # validation rules. Cards are still updated once, after role assignment,
+            # matchup pairing, premades and encounters are complete, so the visible
+            # list does not churn while analysis progresses.
             for player_key, stats in profiles.items():
+                stats["tags"] = most_valid_tags(
+                    list(stats.get("tags", ()))
+                )
+                stats["state"] = (
+                    "ready"
+                    if str(stats.get("state", "")) in {"fast", "ready"}
+                    else str(stats.get("state", "unavailable"))
+                )
                 self.player_stats_changed.emit(player_key, stats)
 
-            # Record the current live roster only after annotations are calculated,
-            # so the current game never counts as a previous encounter.
-            self._record_live_encounters(roster, profiles)
+            # Keep the current roster pending.  It is persisted only when the
+            # game ends or a genuinely new roster appears, so current players can
+            # never become their own "previous encounter" during a refresh.
+            self._stage_live_encounters(roster, profiles, signature)
+            self._last_completed_signature = signature
 
             self.status_changed.emit(
                 "ready",
@@ -347,6 +390,46 @@ class LiveMatchScout(QObject):
             self.status_changed.emit("error", "Live Match could not refresh")
         finally:
             self._busy = False
+
+    @staticmethod
+    def _stable_roster_signature(roster: dict[str, Any]) -> str:
+        """Create a source-independent game identity.
+
+        Spectator uses PUUID player keys while port 2999 uses Riot IDs.  The old
+        signature therefore changed as soon as the match process became ready,
+        rebuilding the page midgame.  Team + champion composition is stable
+        across both sources and is reset whenever gameflow leaves the match.
+        """
+
+        parts: list[str] = []
+        for player in roster.get("players", ()):
+            if not isinstance(player, dict):
+                continue
+            team = str(player.get("team", "") or "").upper()
+            champion = normalize_name(
+                str(player.get("champion", "") or "unknown")
+            )
+            identity = normalize_name(
+                str(
+                    player.get("riot_id", "")
+                    or player.get("game_name", "")
+                    or ""
+                )
+            )
+            # Spectator identities are resolved from PUUID before this point,
+            # while port 2999 exposes the Riot ID directly.  Using the Riot ID
+            # keeps the signature identical across the source hand-off and also
+            # distinguishes consecutive matches with similar champion drafts.
+            stable_player = identity or champion
+            parts.append(f"{team}:{stable_player}:{champion}")
+        return "|".join(sorted(parts))
+
+    def _analysis_is_current(self, signature: str, force: bool = False) -> bool:
+        return bool(
+            signature
+            and not force
+            and signature == self._last_completed_signature
+        )
 
     def _discover_roster(self, platform: str, api_key: str) -> dict[str, Any]:
         """Prefer port 2999, then use LCU + Spectator-v5 during loading."""
@@ -757,7 +840,7 @@ class LiveMatchScout(QObject):
             self._last_known_self_puuid = puuid
 
         disk_cached = self._profile_disk_cache.load(puuid, champion)
-        if disk_cached and int(disk_cached.get("profile_schema", 0) or 0) >= 13:
+        if disk_cached and int(disk_cached.get("profile_schema", 0) or 0) >= 21:
             disk_cached["current_role"] = str(player.get("role", "") or "")
             disk_cached["puuid"] = puuid
             for dynamic_key in (
@@ -771,6 +854,22 @@ class LiveMatchScout(QObject):
                 "encounter_ranked_ally_count",
                 "encounter_ranked_enemy_count",
                 "encounter_last_seen",
+                "encounter_history",
+                "encounter_history_count",
+                "encounter_wins",
+                "encounter_losses",
+                "encounter_win_rate",
+                "encounter_ally_count",
+                "encounter_enemy_count",
+                "encounter_ally_wins",
+                "encounter_enemy_wins",
+                "lane_opponent",
+                "premade_confidence",
+                "premade_sessions",
+                "premade_consecutive_games",
+                "premade_role_pair",
+                "premade_pair_details",
+                "premade_evidence_scope",
             ):
                 disk_cached.pop(dynamic_key, None)
             disk_cached["tags"] = [
@@ -803,20 +902,6 @@ class LiveMatchScout(QObject):
         mastery = self._champion_mastery(puuid, champion, platform, api_key)
 
         current_role = str(player.get("role", "") or "")
-        self.player_stats_changed.emit(
-            player_key,
-            {
-                "state": "partial",
-                "puuid": puuid,
-                **summoner_profile,
-                **ranked,
-                **mastery,
-                "current_role": current_role,
-                "inferred_role": current_role,
-                "role_name": _ROLE_NAMES.get(current_role, "Unknown role"),
-                "tags": [],
-            },
-        )
 
         # Fetch more IDs than detailed matches. The extra IDs improve premade and
         # previous-encounter detection without multiplying match-detail requests.
@@ -867,7 +952,8 @@ class LiveMatchScout(QObject):
             tags=fast_tags,
             local_percentiles=fast_percentiles,
         )
-        self.player_stats_changed.emit(player_key, fast_payload)
+        # Keep the UI stable while the deep profile is still being built.
+        # The completed profile is applied once after team-wide annotations.
 
         # Continue to the deeper 20-game profile. Already downloaded fast samples
         # are reused, and immutable match data comes from the disk cache thereafter.
@@ -966,11 +1052,11 @@ class LiveMatchScout(QObject):
         timeline: dict[str, Any],
         role_status: dict[str, Any],
         match_ids: list[str],
-        tags: list[dict[str, str]],
+        tags: list[dict[str, Any]],
         local_percentiles: dict[str, Any],
     ) -> dict[str, Any]:
         return {
-            "profile_schema": 13,
+            "profile_schema": 21,
             "state": state,
             "puuid": puuid,
             "ranked_only": True,
@@ -1007,17 +1093,22 @@ class LiveMatchScout(QObject):
         current_role: str,
         analysis: dict[str, Any],
         role_status: dict[str, Any],
-    ) -> dict[str, str]:
-        return {
-            "text": str(role_status["role_status_label"]),
-            "tone": str(role_status["role_status_tone"]),
-            "tooltip": (
+    ) -> dict[str, Any]:
+        sample = int(analysis.get("sample_games", 0) or 0)
+        return make_evidence_tag(
+            str(role_status["role_status_label"]),
+            str(role_status["role_status_tone"]),
+            (
                 f"Assigned current role: {_ROLE_NAMES.get(current_role, 'Unknown')} · "
                 f"Recent main role: "
                 f"{_ROLE_NAMES.get(str(analysis.get('main_role', '')), 'Unknown')} "
                 f"({float(analysis.get('role_share', 0) or 0) * 100:.0f}% of games)"
             ),
-        }
+            priority=94 if str(role_status.get("role_state", "")) == "off_role" else 82,
+            group="role_status",
+            category="role",
+            evidence_games=sample,
+        )
 
     def _summoner_profile(self, puuid: str, platform: str, api_key: str) -> dict[str, Any]:
         url = (
@@ -1520,6 +1611,9 @@ class LiveMatchScout(QObject):
             "late_game_win_rate": None,
             "short_game_games": 0,
             "short_game_win_rate": None,
+            "session_games": 0,
+            "session_span_minutes": 0,
+            "days_since_last_ranked": None,
         }
         if not samples:
             return empty
@@ -1782,6 +1876,7 @@ class LiveMatchScout(QObject):
             "short_game_win_rate": round((short_wins / short_games) * 100.0, 1)
             if short_games
             else None,
+            **derive_session_metrics(samples),
         }
 
     def _analyse_timelines(
@@ -1806,6 +1901,15 @@ class LiveMatchScout(QObject):
             "invader_deaths": 0,
             "invader_games": 0,
             "early_fights": 0,
+            "avg_gold_diff_at_10": 0.0,
+            "avg_xp_diff_at_10": 0.0,
+            "avg_cs_diff_at_10": 0.0,
+            "avg_lane_cs_at_10": 0.0,
+            "avg_jungle_cs_at_6": 0.0,
+            "solo_kill_rate": 0.0,
+            "solo_death_rate": 0.0,
+            "gank_before_5_rate": 0.0,
+            "ward_before_10_rate": 0.0,
         }
         if not samples:
             return result
@@ -1813,6 +1917,10 @@ class LiveMatchScout(QObject):
         lead10 = behind10 = early_death_games = early_kp_games = 0
         roam_games = objective_games = comeback_games = throw_games = 0
         invader_kills = invader_deaths = invader_games = early_fights = 0
+        solo_kill_games = solo_death_games = gank_before_5_games = ward_before_10_games = 0
+        gold_diff10_total = xp_diff10_total = cs_diff10_total = lane_cs10_total = 0.0
+        jungle_cs6_total = 0.0
+        lane_frame_games = jungle_frame_games = 0
         analysed = 0
 
         for sample in samples:
@@ -1849,12 +1957,18 @@ class LiveMatchScout(QObject):
                 continue
 
             analysed += 1
+            frame6 = frames[min(6, len(frames) - 1)]
             frame10 = frames[min(10, len(frames) - 1)]
             frame15 = frames[min(15, len(frames) - 1)]
+            own6 = self._participant_frame(frame6, participant_id)
             own10 = self._participant_frame(frame10, participant_id)
             opp10 = self._participant_frame(frame10, opponent_id)
             own15 = self._participant_frame(frame15, participant_id)
             opp15 = self._participant_frame(frame15, opponent_id)
+
+            if match_role == "JUNGLE" and own6:
+                jungle_cs6_total += float(own6.get("jungleMinionsKilled", 0) or 0)
+                jungle_frame_games += 1
 
             if own10 and opp10:
                 gold_diff = float(own10.get("totalGold", 0) or 0) - float(
@@ -1863,6 +1977,17 @@ class LiveMatchScout(QObject):
                 xp_diff = float(own10.get("xp", 0) or 0) - float(
                     opp10.get("xp", 0) or 0
                 )
+                own_cs = float(own10.get("minionsKilled", 0) or 0) + float(
+                    own10.get("jungleMinionsKilled", 0) or 0
+                )
+                opp_cs = float(opp10.get("minionsKilled", 0) or 0) + float(
+                    opp10.get("jungleMinionsKilled", 0) or 0
+                )
+                gold_diff10_total += gold_diff
+                xp_diff10_total += xp_diff
+                cs_diff10_total += own_cs - opp_cs
+                lane_cs10_total += own_cs
+                lane_frame_games += 1
                 if gold_diff >= 300 or xp_diff >= 250:
                     lead10 += 1
                 elif gold_diff <= -300 or xp_diff <= -250:
@@ -1882,6 +2007,10 @@ class LiveMatchScout(QObject):
             game_roam = False
             game_objective = False
             game_invade = False
+            game_solo_kill = False
+            game_solo_death = False
+            game_gank_before_5 = False
+            game_ward_before_10 = False
 
             for frame in frames:
                 events = frame.get("events", []) if isinstance(frame, dict) else []
@@ -1905,8 +2034,14 @@ class LiveMatchScout(QObject):
                         early_fights += 1
                         if victim == participant_id:
                             game_early_death = True
+                            if not assists:
+                                game_solo_death = True
                         if killer == participant_id or participant_id in assists:
                             game_early_kp = True
+                            if killer == participant_id and not assists:
+                                game_solo_kill = True
+                            if match_role == "JUNGLE" and timestamp <= 5 * 60 * 1000:
+                                game_gank_before_5 = True
 
                         position = event.get("position", {})
                         x = (
@@ -1942,6 +2077,18 @@ class LiveMatchScout(QObject):
                                 invader_deaths += 1
 
                     if (
+                        event.get("type") in {"WARD_PLACED", "WARD_KILL"}
+                        and timestamp <= 10 * 60 * 1000
+                    ):
+                        ward_actor = int(
+                            event.get("creatorId", 0)
+                            or event.get("killerId", 0)
+                            or 0
+                        )
+                        if ward_actor == participant_id:
+                            game_ward_before_10 = True
+
+                    if (
                         event.get("type") == "ELITE_MONSTER_KILL"
                         and timestamp <= 15 * 60 * 1000
                     ):
@@ -1959,6 +2106,10 @@ class LiveMatchScout(QObject):
             roam_games += int(game_roam)
             objective_games += int(game_objective)
             invader_games += int(game_invade)
+            solo_kill_games += int(game_solo_kill)
+            solo_death_games += int(game_solo_death)
+            gank_before_5_games += int(game_gank_before_5)
+            ward_before_10_games += int(game_ward_before_10)
 
         if not analysed:
             return result
@@ -1986,6 +2137,25 @@ class LiveMatchScout(QObject):
             "invader_deaths": invader_deaths,
             "invader_games": invader_games,
             "early_fights": early_fights,
+            "avg_gold_diff_at_10": round(gold_diff10_total / lane_frame_games, 1)
+            if lane_frame_games
+            else 0.0,
+            "avg_xp_diff_at_10": round(xp_diff10_total / lane_frame_games, 1)
+            if lane_frame_games
+            else 0.0,
+            "avg_cs_diff_at_10": round(cs_diff10_total / lane_frame_games, 1)
+            if lane_frame_games
+            else 0.0,
+            "avg_lane_cs_at_10": round(lane_cs10_total / lane_frame_games, 1)
+            if lane_frame_games
+            else 0.0,
+            "avg_jungle_cs_at_6": round(jungle_cs6_total / jungle_frame_games, 1)
+            if jungle_frame_games
+            else 0.0,
+            "solo_kill_rate": round((solo_kill_games / analysed) * 100.0, 1),
+            "solo_death_rate": round((solo_death_games / analysed) * 100.0, 1),
+            "gank_before_5_rate": round((gank_before_5_games / analysed) * 100.0, 1),
+            "ward_before_10_rate": round((ward_before_10_games / analysed) * 100.0, 1),
         }
 
     @staticmethod
@@ -2043,8 +2213,8 @@ class LiveMatchScout(QObject):
     @staticmethod
     def _role_status(current_role: str, analysis: dict[str, Any]) -> dict[str, Any]:
         sample_games = int(analysis.get("sample_games", 0) or 0)
-        main_role = str(analysis.get("main_role", "") or "")
-        secondary_role = str(analysis.get("secondary_role", "") or "")
+        current_role = str(current_role or "").upper()
+        main_role = str(analysis.get("main_role", "") or "").upper()
         role_counts = dict(analysis.get("role_counts", {}) or {})
         current_share = (
             role_counts.get(current_role, 0) / sample_games
@@ -2056,22 +2226,17 @@ class LiveMatchScout(QObject):
             state = "unclear"
             label = "ROLE UNCLEAR"
             tone = "neutral"
-        elif current_role == main_role and float(analysis.get("role_share", 0) or 0) >= 0.45:
+        elif current_role == main_role:
             state = "main"
             label = "MAIN ROLE"
             tone = "positive"
-        elif current_role == secondary_role and float(analysis.get("secondary_role_share", 0) or 0) >= 0.20:
-            state = "secondary"
-            label = "SECONDARY ROLE"
-            tone = "warning"
-        elif current_share <= 0.25:
-            state = "off_role"
-            label = "LIKELY OFF-ROLE"
-            tone = "negative"
         else:
-            state = "flex"
-            label = "FLEX ROLE"
-            tone = "neutral"
+            # The user-facing rule is intentionally simple: whenever the
+            # assigned current role differs from the recent main role, say
+            # OFFROLE.  The tooltip still explains sample share and evidence.
+            state = "off_role"
+            label = "OFFROLE"
+            tone = "negative" if current_share <= 0.25 else "warning"
 
         return {
             "role_state": state,
@@ -2175,34 +2340,24 @@ class LiveMatchScout(QObject):
                     }
                 profile.update(role_status)
 
-                tags = [
-                    tag
-                    for tag in list(profile.get("tags", ()))
-                    if not (
-                        isinstance(tag, dict)
-                        and str(tag.get("text", ""))
-                        in {
-                            "MAIN ROLE",
-                            "SECONDARY ROLE",
-                            "LIKELY OFF-ROLE",
-                            "FLEX ROLE",
-                            "ROLE UNCLEAR",
-                        }
-                    )
-                ]
-                if role_status["role_state"] not in {"unclear", "main"}:
-                    tags.insert(
-                        0,
-                        self._role_tag(assigned_role, profile, role_status),
-                    )
-
                 local_percentiles = self._baseline_store.percentiles(
                     assigned_role,
                     profile,
                 )
                 profile["local_percentiles"] = local_percentiles
-                tags.extend(self._percentile_tags(local_percentiles))
-                profile["tags"] = self._dedupe_tags(tags)[:8]
+                tags = self._build_tags(
+                    profile,
+                    profile,
+                    assigned_role,
+                    profile,
+                    profile,
+                    local_percentiles,
+                )
+                if role_status["role_state"] not in {"unclear", "main"}:
+                    tags.append(
+                        self._role_tag(assigned_role, profile, role_status)
+                    )
+                profile["tags"] = prioritize_tags(tags, limit=8)
 
     @staticmethod
     def _role_assignment_score(
@@ -2258,6 +2413,26 @@ class LiveMatchScout(QObject):
             score += 10.0
 
         return score
+
+    def _apply_lane_matchups(
+        self,
+        roster: dict[str, Any],
+        profiles: dict[str, dict[str, Any]],
+    ) -> None:
+        matchups = pair_lane_opponents(roster, profiles)
+        for player_key, comparison in matchups.items():
+            profile = profiles.get(player_key)
+            if not isinstance(profile, dict):
+                continue
+            profile["lane_opponent"] = comparison
+            tag = matchup_tag(
+                comparison,
+                int(profile.get("sample_games", 0) or 0),
+            )
+            tags = list(profile.get("tags", ()))
+            if tag is not None:
+                tags.append(tag)
+            profile["tags"] = prioritize_tags(tags, limit=8)
 
     @staticmethod
     def _percentile_tags(
@@ -2344,14 +2519,30 @@ class LiveMatchScout(QObject):
 
             encounter_key = self._encounter_key(player, profile)
             local = self._encounter_store.lookup(encounter_key)
-            local_ally = int(local.get("ally_count", 0) or 0)
-            local_enemy = int(local.get("enemy_count", 0) or 0)
+            current_signature = self._stable_roster_signature(roster)
+            current_started_at = float(roster.get("game_started_at", 0) or 0)
+            if current_started_at <= 0:
+                # Spectator can briefly omit gameStartTime.  Suppress only very
+                # recent local records during that window to avoid V18 current-
+                # game entries appearing as previous encounters.
+                current_started_at = time.time() - 300.0
+            previous_local_entries = filter_previous_encounters(
+                list(local.get("entries", ())),
+                current_game_started_at=current_started_at,
+                current_game_signature=current_signature,
+            )
+            local_ally = sum(
+                1 for entry in previous_local_entries
+                if str(entry.get("relation", "") or "") == "ally"
+            )
+            local_enemy = sum(
+                1 for entry in previous_local_entries
+                if str(entry.get("relation", "") or "") == "enemy"
+            )
             local_total = local_ally + local_enemy
             encounter_history: list[dict[str, Any]] = []
 
-            for entry in list(local.get("entries", ()))[-8:]:
-                if not isinstance(entry, dict):
-                    continue
+            for entry in previous_local_entries[:8]:
                 encounter_history.append(
                     {
                         "source": "tracked",
@@ -2359,6 +2550,12 @@ class LiveMatchScout(QObject):
                         "my_champion": str(entry.get("my_champion", "") or "Unknown"),
                         "their_champion": str(entry.get("champion", "") or "Unknown"),
                         "timestamp": float(entry.get("timestamp", 0) or 0),
+                        "won": entry.get("won") if isinstance(entry.get("won"), bool) else None,
+                        "result": str(entry.get("result", "") or ""),
+                        "my_kda": str(entry.get("my_kda", "") or ""),
+                        "their_kda": str(entry.get("their_kda", "") or ""),
+                        "queue_id": int(entry.get("queue_id", 0) or 0),
+                        "match_id": str(entry.get("match_id", "") or ""),
                     }
                 )
 
@@ -2424,6 +2621,23 @@ class LiveMatchScout(QObject):
                                 else 0.0
                             ),
                             "match_id": str(match_id),
+                            "won": bool(active_participant.get("win", False)),
+                            "result": (
+                                "Victory"
+                                if bool(active_participant.get("win", False))
+                                else "Defeat"
+                            ),
+                            "my_kda": (
+                                f"{int(active_participant.get('kills', 0) or 0)}/"
+                                f"{int(active_participant.get('deaths', 0) or 0)}/"
+                                f"{int(active_participant.get('assists', 0) or 0)}"
+                            ),
+                            "their_kda": (
+                                f"{int(other_participant.get('kills', 0) or 0)}/"
+                                f"{int(other_participant.get('deaths', 0) or 0)}/"
+                                f"{int(other_participant.get('assists', 0) or 0)}"
+                            ),
+                            "queue_id": int(info.get("queueId", 0) or 0),
                         }
                     )
 
@@ -2438,7 +2652,10 @@ class LiveMatchScout(QObject):
             profile["encounter_ranked_ally_count"] = api_ally
             profile["encounter_ranked_enemy_count"] = api_enemy
             profile["encounter_last_seen"] = max(
-                float(local.get("last_seen", 0) or 0),
+                max(
+                    (float(entry.get("timestamp", 0) or 0) for entry in previous_local_entries),
+                    default=0.0,
+                ),
                 last_api_seen / 1000.0 if last_api_seen else 0.0,
             )
 
@@ -2449,21 +2666,38 @@ class LiveMatchScout(QObject):
                 reverse=True,
             )
             deduped_history: list[dict[str, Any]] = []
-            seen_history: set[tuple[Any, ...]] = set()
+            seen_match_ids: set[str] = set()
             for item in encounter_history:
-                identity = (
-                    str(item.get("source", "")),
-                    str(item.get("relation", "")),
-                    str(item.get("my_champion", "")),
-                    str(item.get("their_champion", "")),
-                    int(float(item.get("timestamp", 0) or 0) // 60),
-                    str(item.get("match_id", "")),
-                )
-                if identity in seen_history:
+                match_id = str(item.get("match_id", "") or "")
+                if match_id and match_id in seen_match_ids:
                     continue
-                seen_history.add(identity)
+                relation = str(item.get("relation", "") or "")
+                my_champion = str(item.get("my_champion", "") or "")
+                their_champion = str(item.get("their_champion", "") or "")
+                timestamp = float(item.get("timestamp", 0) or 0)
+                duplicate = any(
+                    str(existing.get("relation", "") or "") == relation
+                    and str(existing.get("my_champion", "") or "") == my_champion
+                    and str(existing.get("their_champion", "") or "") == their_champion
+                    and timestamp
+                    and float(existing.get("timestamp", 0) or 0)
+                    and abs(float(existing.get("timestamp", 0) or 0) - timestamp)
+                    <= 3 * 60 * 60
+                    for existing in deduped_history
+                )
+                if duplicate:
+                    continue
+                if match_id:
+                    seen_match_ids.add(match_id)
                 deduped_history.append(item)
             profile["encounter_history"] = deduped_history[:8]
+            encounter_summary = summarize_encounters(deduped_history)
+            profile.update(encounter_summary)
+            previous_count = max(
+                previous_count,
+                int(encounter_summary.get("encounter_history_count", 0) or 0),
+            )
+            profile["encounter_count"] = previous_count
 
             total_ally = max(local_ally, api_ally)
             total_enemy = max(local_enemy, api_enemy)
@@ -2488,6 +2722,12 @@ class LiveMatchScout(QObject):
                 details.append(
                     "Recent Solo/Duo history found "
                     f"{api_ally} ally and {api_enemy} enemy game(s)"
+                )
+            record_wins = int(profile.get("encounter_wins", 0) or 0)
+            record_losses = int(profile.get("encounter_losses", 0) or 0)
+            if record_wins + record_losses:
+                details.append(
+                    f"Your recent record in these meetings: {record_wins}W-{record_losses}L"
                 )
             last_seen = float(profile.get("encounter_last_seen", 0) or 0)
             if last_seen:
@@ -2517,9 +2757,17 @@ class LiveMatchScout(QObject):
                         .astimezone()
                         .strftime("%Y-%m-%d")
                     )
+                result_text = str(item.get("result", "") or "")
+                my_kda = str(item.get("my_kda", "") or "")
+                their_kda = str(item.get("their_kda", "") or "")
+                record_text = f" · {result_text}" if result_text else ""
+                if my_kda or their_kda:
+                    record_text += (
+                        f" · KDA {my_kda or '—'} vs {their_kda or '—'}"
+                    )
                 history_lines.append(
                     f"{relation_text}: you played {my_champion}; "
-                    f"they played {their_champion}{when_text}"
+                    f"they played {their_champion}{record_text}{when_text}"
                 )
 
             tooltip_parts = list(details)
@@ -2528,11 +2776,16 @@ class LiveMatchScout(QObject):
                     "Recent encounters:\n" + "\n".join(history_lines)
                 )
 
-            encounter_tag = {
-                "text": label,
-                "tone": "neutral",
-                "tooltip": "\n".join(tooltip_parts),
-            }
+            encounter_tag = make_evidence_tag(
+                label,
+                "neutral",
+                "\n".join(tooltip_parts),
+                priority=100,
+                group="encounter",
+                category="encounter",
+                evidence_games=previous_count,
+                exact_evidence=True,
+            )
             tags = [
                 tag
                 for tag in list(profile.get("tags", ()))
@@ -2553,37 +2806,23 @@ class LiveMatchScout(QObject):
             tags.insert(0, encounter_tag)
             profile["tags"] = self._dedupe_tags(tags)[:8]
 
-    def _record_live_encounters(
+    def _stage_live_encounters(
         self,
         roster: dict[str, Any],
         profiles: dict[str, dict[str, Any]],
+        signature: str,
     ) -> None:
         players = list(roster.get("players", ()))
         active_player = next(
             (player for player in players if bool(player.get("is_active"))),
             None,
         )
-        if active_player is None:
+        if active_player is None or not signature:
             return
 
         active_key = str(active_player.get("player_key", ""))
         active_team = str(active_player.get("team", "") or "")
         active_champion = str(active_player.get("champion", "") or "")
-        signature_parts = [
-            self._encounter_key(
-                player,
-                profiles.get(str(player.get("player_key", "")), {}),
-            )
-            for player in players
-        ]
-        signature = (
-            str(int(roster.get("game_started_at", 0) or 0))
-            + "|"
-            + active_team
-            + "|"
-            + "|".join(sorted(part for part in signature_parts if part))
-        )
-
         records: list[dict[str, Any]] = []
         for player in players:
             player_key = str(player.get("player_key", ""))
@@ -2602,10 +2841,51 @@ class LiveMatchScout(QObject):
                     "relation": relation,
                     "champion": str(player.get("champion", "") or ""),
                     "my_champion": active_champion,
+                    "game_signature": signature,
                 }
             )
 
-        self._encounter_store.record_game(signature, records)
+        now = time.time()
+        game_started_at = float(roster.get("game_started_at", 0) or 0)
+        existing = self._pending_encounter_game
+        if existing and str(existing.get("signature", "")) == signature:
+            existing["last_seen"] = now
+            existing["records"] = records
+            return
+        if existing:
+            self._flush_pending_encounters()
+        self._pending_encounter_game = {
+            "signature": signature,
+            "first_seen": game_started_at if game_started_at > 0 else now,
+            "last_seen": now,
+            "records": records,
+        }
+
+    def _flush_pending_encounters(self) -> bool:
+        pending = self._pending_encounter_game
+        self._pending_encounter_game = None
+        if not pending:
+            return False
+        first_seen = float(pending.get("first_seen", 0) or 0)
+        # Avoid recording a cancelled loading screen or practice-tool blip.
+        if time.time() - first_seen < 60.0:
+            return False
+        signature = str(pending.get("signature", "") or "")
+        records = list(pending.get("records", ()))
+        return self._encounter_store.record_game(signature, records)
+
+    # Backwards-compatible private name used by older tests/extensions.  It now
+    # stages instead of persisting the currently running game.
+    def _record_live_encounters(
+        self,
+        roster: dict[str, Any],
+        profiles: dict[str, dict[str, Any]],
+    ) -> None:
+        self._stage_live_encounters(
+            roster,
+            profiles,
+            self._stable_roster_signature(roster),
+        )
 
     @staticmethod
     def _encounter_key(
@@ -2655,11 +2935,12 @@ class LiveMatchScout(QObject):
 
         for team_key in ("allies", "enemies"):
             players = list(roster.get(team_key, ()))
-            keys = [
-                str(player.get("player_key", ""))
+            player_by_key = {
+                str(player.get("player_key", "")): player
                 for player in players
-                if str(player.get("player_key", "")) in profiles
-            ]
+                if str(player.get("player_key", ""))
+            }
+            keys = [key for key in player_by_key if key in profiles]
             adjacency: dict[str, set[str]] = {key: set() for key in keys}
             pair_details: dict[frozenset[str], dict[str, Any]] = {}
 
@@ -2668,6 +2949,7 @@ class LiveMatchScout(QObject):
                 left_matches = [
                     str(item)
                     for item in left_profile.get("recent_match_ids", ())
+                    if str(item)
                 ]
                 left_puuid = str(left_profile.get("puuid", "") or "")
                 if not left_matches or not left_puuid:
@@ -2675,21 +2957,18 @@ class LiveMatchScout(QObject):
 
                 for right_key in keys[index + 1 :]:
                     right_profile = profiles[right_key]
-                    right_matches = set(
+                    right_matches = {
                         str(item)
                         for item in right_profile.get("recent_match_ids", ())
-                    )
+                        if str(item)
+                    }
                     right_puuid = str(right_profile.get("puuid", "") or "")
                     if not right_puuid:
                         continue
 
-                    shared = [
-                        match_id
-                        for match_id in left_matches
-                        if match_id in right_matches
-                    ]
-                    together = wins = 0
-                    for match_id in shared[:8]:
+                    shared = [match_id for match_id in left_matches if match_id in right_matches]
+                    records: list[dict[str, Any]] = []
+                    for match_id in shared[:12]:
                         try:
                             match = self._match(match_id, route, api_key)
                         except Exception:
@@ -2698,31 +2977,82 @@ class LiveMatchScout(QObject):
                         right_participant = self._participant(match, right_puuid)
                         if not left_participant or not right_participant:
                             continue
-                        if (
-                            left_participant.get("teamId")
-                            != right_participant.get("teamId")
-                        ):
+                        if left_participant.get("teamId") != right_participant.get("teamId"):
                             continue
-                        together += 1
-                        wins += int(bool(left_participant.get("win", False)))
+                        info = match.get("info", {}) if isinstance(match, dict) else {}
+                        timestamp_ms = int(
+                            info.get("gameEndTimestamp", 0)
+                            or info.get("gameStartTimestamp", 0)
+                            or info.get("gameCreation", 0)
+                            or 0
+                        )
+                        records.append(
+                            {
+                                "match_id": match_id,
+                                "timestamp": timestamp_ms / 1000.0 if timestamp_ms else 0.0,
+                                "won": bool(left_participant.get("win", False)),
+                            }
+                        )
 
+                    together = len(records)
                     if together < 2:
                         continue
+                    verified_ids = {str(item.get("match_id", "")) for item in records}
+                    consecutive = 0
+                    for match_id in left_matches:
+                        if match_id in verified_ids:
+                            consecutive += 1
+                        else:
+                            break
 
-                    adjacency[left_key].add(right_key)
-                    adjacency[right_key].add(left_key)
-                    pair_details[frozenset({left_key, right_key})] = {
+                    timestamps = sorted(
+                        float(item.get("timestamp", 0) or 0)
+                        for item in records
+                        if float(item.get("timestamp", 0) or 0) > 0
+                    )
+                    sessions = 0
+                    previous_timestamp = 0.0
+                    for timestamp in timestamps:
+                        if not previous_timestamp or timestamp - previous_timestamp > 3 * 60 * 60:
+                            sessions += 1
+                        previous_timestamp = timestamp
+                    sessions = max(sessions, 1 if records else 0)
+                    wins = sum(int(bool(item.get("won", False))) for item in records)
+                    confidence = premade_pair_confidence(together, consecutive, sessions)
+                    if confidence.label == "Weak":
+                        continue
+
+                    left_role = str(
+                        left_profile.get("assigned_role", "")
+                        or left_profile.get("inferred_role", "")
+                        or ""
+                    )
+                    right_role = str(
+                        right_profile.get("assigned_role", "")
+                        or right_profile.get("inferred_role", "")
+                        or ""
+                    )
+                    label = premade_role_label(left_role, right_role, 2)
+                    details = {
                         "games": together,
                         "wins": wins,
                         "win_rate": round((wins / together) * 100.0, 1),
+                        "consecutive": consecutive,
+                        "sessions": sessions,
+                        "confidence": confidence.label,
+                        "confidence_score": confidence.score,
+                        "label": label,
+                        "roles": (left_role, right_role),
                     }
+                    adjacency[left_key].add(right_key)
+                    adjacency[right_key].add(left_key)
+                    pair_details[frozenset({left_key, right_key})] = details
 
             visited: set[str] = set()
-            for start in keys:
-                if start in visited or not adjacency[start]:
+            for start_key in keys:
+                if start_key in visited or not adjacency[start_key]:
                     continue
-
-                stack = [start]
+                stack = [start_key]
                 group: list[str] = []
                 while stack:
                     current = stack.pop()
@@ -2731,106 +3061,113 @@ class LiveMatchScout(QObject):
                     visited.add(current)
                     group.append(current)
                     stack.extend(adjacency[current] - visited)
-
                 if len(group) < 2:
                     continue
 
+                group_set = set(group)
                 group_pairs = [
-                    details
+                    {"members": tuple(pair), **details}
                     for pair, details in pair_details.items()
-                    if pair.issubset(set(group))
+                    if pair.issubset(group_set)
                 ]
-                together_games = max(
-                    (int(item.get("games", 0) or 0) for item in group_pairs),
-                    default=0,
+                if not group_pairs:
+                    continue
+                strongest = max(
+                    group_pairs,
+                    key=lambda item: (
+                        int(item.get("confidence_score", 0) or 0),
+                        int(item.get("games", 0) or 0),
+                    ),
                 )
-                together_wins = max(
-                    (int(item.get("wins", 0) or 0) for item in group_pairs),
-                    default=0,
+                group_confidence_score = int(round(
+                    sum(int(item.get("confidence_score", 0) or 0) for item in group_pairs)
+                    / len(group_pairs)
+                ))
+                group_confidence = (
+                    "High" if group_confidence_score >= 75 else "Medium"
                 )
-                win_rate = (
-                    round((together_wins / together_games) * 100.0, 1)
-                    if together_games
-                    else None
-                )
+                together_games = int(strongest.get("games", 0) or 0)
+                together_wins = int(strongest.get("wins", 0) or 0)
+                win_rate = strongest.get("win_rate")
+                sessions = max(int(item.get("sessions", 0) or 0) for item in group_pairs)
+                consecutive = max(int(item.get("consecutive", 0) or 0) for item in group_pairs)
 
                 for player_key in group:
                     profile = profiles[player_key]
                     members = [
-                        str(
-                            next(
-                                (
-                                    player.get("riot_id", "")
-                                    for player in players
-                                    if str(player.get("player_key", ""))
-                                    == member
-                                ),
-                                "",
-                            )
-                        )
+                        str(player_by_key.get(member, {}).get("riot_id", "") or member)
                         for member in group
                         if member != player_key
                     ]
+                    own_pairs = [
+                        item for item in group_pairs
+                        if player_key in set(item.get("members", ()))
+                    ]
+                    if len(group) == 2 and own_pairs:
+                        label = str(own_pairs[0].get("label", "PREMADE DUO") or "PREMADE DUO")
+                    else:
+                        label = premade_role_label("", "", len(group))
+
                     profile["premade_size"] = len(group)
                     profile["premade_members"] = members
                     profile["premade_games_together"] = together_games
                     profile["premade_win_rate"] = win_rate
+                    profile["premade_confidence"] = group_confidence
+                    profile["premade_confidence_score"] = group_confidence_score
+                    profile["premade_sessions"] = sessions
+                    profile["premade_consecutive_games"] = consecutive
+                    profile["premade_role_pair"] = label
+                    profile["premade_pair_details"] = own_pairs
+                    evidence_scope = "strongest_pair" if len(group) > 2 else "pair"
+                    profile["premade_evidence_scope"] = evidence_scope
 
-                    detail = (
-                        f"Repeated same-team history with {', '.join(members)}"
+                    game_evidence_text = (
+                        f"{together_games} verified recent game(s) on the strongest pair"
+                        if evidence_scope == "strongest_pair"
+                        else f"{together_games} verified recent game(s) together"
                     )
-                    if together_games:
-                        detail += f" · {together_games} recent game(s) together"
+                    detail_parts = [
+                        f"Repeated same-team history with {', '.join(members)}",
+                        game_evidence_text,
+                        f"{sessions} separate session(s)",
+                    ]
+                    if consecutive >= 2:
+                        detail_parts.append(f"{consecutive} consecutive shared games")
                     if win_rate is not None:
-                        detail += f" · {win_rate:.0f}% win rate together"
-
-                    premade_tag = {
-                        "text": f"PREMADE {len(group)}",
-                        "tone": "warning",
-                        "tooltip": detail,
-                    }
+                        detail_parts.append(f"{float(win_rate):.0f}% WR together")
+                    detail_parts.append(
+                        f"Premade confidence: {group_confidence} ({group_confidence_score}/100)"
+                    )
+                    premade_tag = make_evidence_tag(
+                        label,
+                        "warning",
+                        " · ".join(detail_parts),
+                        priority=92,
+                        group="premade",
+                        category="premade",
+                        evidence_games=together_games,
+                        exact_evidence=True,
+                    )
                     tags = [
                         tag
                         for tag in list(profile.get("tags", ()))
                         if not (
                             isinstance(tag, dict)
-                            and str(tag.get("text", "")).startswith(
-                                "PREMADE "
+                            and (
+                                str(tag.get("category", "")) == "premade"
+                                or "PREMADE" in str(tag.get("text", ""))
+                                or str(tag.get("text", "")).endswith(" DUO")
                             )
                         )
                     ]
-                    role_tags = [
-                        tag
-                        for tag in tags
-                        if isinstance(tag, dict)
-                        and str(tag.get("text", ""))
-                        in {
-                            "MAIN ROLE",
-                            "SECONDARY ROLE",
-                            "LIKELY OFF-ROLE",
-                            "FLEX ROLE",
-                        }
-                    ]
-                    others = [tag for tag in tags if tag not in role_tags]
-                    profile["tags"] = self._dedupe_tags(
-                        role_tags[:1] + [premade_tag] + others
-                    )[:8]
+                    tags.append(premade_tag)
+                    profile["tags"] = prioritize_tags(tags, limit=8)
 
     @staticmethod
     def _dedupe_tags(
         tags: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        seen: set[str] = set()
-        output: list[dict[str, Any]] = []
-        for tag in tags:
-            if not isinstance(tag, dict):
-                continue
-            text = str(tag.get("text", "") or "")
-            if not text or text in seen:
-                continue
-            seen.add(text)
-            output.append(tag)
-        return output
+        return prioritize_tags(tags, limit=8)
 
     @staticmethod
     def _build_tags(
@@ -2840,10 +3177,13 @@ class LiveMatchScout(QObject):
         timeline: dict[str, Any],
         mastery: dict[str, Any],
         local_percentiles: dict[str, Any],
-    ) -> list[dict[str, str]]:
-        candidates: list[dict[str, Any]] = []
+    ) -> list[dict[str, Any]]:
         sample = int(analysis.get("sample_games", 0) or 0)
         timeline_games = int(timeline.get("timeline_games", 0) or 0)
+        candidates: list[dict[str, Any]] = []
+        candidates.extend(session_tags(analysis))
+        candidates.extend(champion_intelligence_tags(analysis, mastery, role))
+        candidates.extend(role_timeline_tags(role, analysis, timeline))
 
         def add(
             text: str,
@@ -2858,75 +3198,21 @@ class LiveMatchScout(QObject):
                 for tag in candidates
             }:
                 return
-            evidence = sample if evidence_games is None else evidence_games
-            confidence = (
-                "High"
-                if evidence >= 12
-                else "Medium"
-                if evidence >= 6
-                else "Early signal"
-            )
-            tooltip = detail
-            if not tooltip:
-                tooltip = (
-                    f"{confidence} · based on {evidence} recent ranked game(s)"
-                )
+            evidence = sample if evidence_games is None else int(evidence_games)
             candidates.append(
-                {
-                    "text": text,
-                    "tone": tone,
-                    "tooltip": tooltip,
-                    "_priority": int(priority),
-                    "_group": group,
-                }
+                make_evidence_tag(
+                    text,
+                    tone,
+                    detail,
+                    priority=int(priority),
+                    group=group,
+                    evidence_games=evidence,
+                    exact_evidence=group in {"rank", "session"} and evidence > 0,
+                )
             )
 
-        # Session state. These tags use match timestamps rather than guessing
-        # whether the person slept or literally just woke up.
-        games_today = int(analysis.get("games_today", 0) or 0)
-        last_minutes = analysis.get("last_ranked_minutes_ago")
-        if sample >= 1 and bool(analysis.get("first_ranked_today", False)):
-            add(
-                "FIRST RANKED TODAY",
-                "neutral",
-                "No earlier Solo/Duo match was found today; the current live game is not yet in Match-v5 history",
-                100,
-                "session",
-                sample,
-            )
-        elif games_today >= 6:
-            add(
-                "LONG SESSION",
-                "warning",
-                f"Already played {games_today} Solo/Duo games today",
-                97,
-                "session",
-            )
-        elif (
-            games_today >= 1
-            and last_minutes is not None
-            and int(last_minutes) <= 20
-        ):
-            add(
-                "BACK-TO-BACK",
-                "warning",
-                f"Last Solo/Duo game ended about {int(last_minutes)} minutes ago",
-                94,
-                "session",
-            )
-        elif (
-            games_today >= 1
-            and last_minutes is not None
-            and int(last_minutes) <= 180
-        ):
-            add(
-                "WARMED UP",
-                "neutral",
-                f"Already played {games_today} Solo/Duo game(s) today",
-                73,
-                "session",
-            )
-
+        # Session-state tags are produced by session_tags(), which uses actual
+        # timestamp gaps and current-session length rather than a single date flag.
         streak_count = int(analysis.get("streak_count", 0) or 0)
         streak_type = str(analysis.get("streak_type", "") or "")
         recent_wr = analysis.get("recent_win_rate")
@@ -3501,34 +3787,7 @@ class LiveMatchScout(QObject):
             for tag in LiveMatchScout._percentile_tags(local_percentiles)
         )
 
-        # Keep only the strongest tag in each contradiction/redundancy group.
-        candidates.sort(
-            key=lambda tag: int(tag.get("_priority", 0)),
-            reverse=True,
-        )
-        selected: list[dict[str, str]] = []
-        used_groups: set[str] = set()
-        used_text: set[str] = set()
-
-        for tag in candidates:
-            group = str(tag.get("_group", "") or "")
-            text = str(tag.get("text", "") or "")
-            if not text or text in used_text:
-                continue
-            if group and group in used_groups:
-                continue
-            used_text.add(text)
-            if group:
-                used_groups.add(group)
-            selected.append(
-                {
-                    "text": text,
-                    "tone": str(tag.get("tone", "positive")),
-                    "tooltip": str(tag.get("tooltip", "")),
-                }
-            )
-
-        return selected
+        return prioritize_tags(candidates, limit=8)
 
     @staticmethod
     def _local_json(endpoint: str) -> Any:
@@ -3553,7 +3812,7 @@ class LiveMatchScout(QObject):
                 headers={
                     "Accept": "application/json",
                     "X-Riot-Token": api_key,
-                    "User-Agent": "LeagueHighlights/LiveMatchV15",
+                    "User-Agent": "LeagueHighlights/LiveMatchV21",
                 },
             )
             try:

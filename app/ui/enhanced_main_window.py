@@ -22,7 +22,10 @@ from app.models import RecorderState
 from app.services.recording_policy import (
     RECORDING_SCOPE_ALL,
     RECORDING_SCOPE_EXCLUDE_ARAM,
+    RECORDING_SCOPE_FLEX_ONLY,
+    RECORDING_SCOPE_NORMAL_DRAFT_ONLY,
     RECORDING_SCOPE_RANKED_ONLY,
+    RECORDING_SCOPE_SOLO_DUO_ONLY,
     install_recording_policy,
 )
 from app.ui.live_match_page import LiveMatchPage
@@ -106,6 +109,12 @@ class EnhancedMainWindow(MainWindow):
         self._enhance_settings_navigation()
         self._build_bottom_status_bar()
 
+        self.recording_policy.session_changed.connect(self._on_lcu_session_changed)
+        self.recording_policy.identity_changed.connect(self._on_lcu_identity_changed)
+        self.recording_policy.policy_status_changed.connect(
+            lambda *_args: self._refresh_recording_policy_views()
+        )
+
         # Keep the extra UI synchronized without replacing the existing handlers.
         self.controller.state_changed.connect(
             lambda *_args: self._refresh_bottom_status()
@@ -123,6 +132,7 @@ class EnhancedMainWindow(MainWindow):
         self._decorate_game_cards()
         self._apply_highlight_filters()
         self._refresh_bottom_status()
+        self._refresh_recording_policy_views()
 
     # ------------------------------------------------------------------
     # Live Match
@@ -210,8 +220,8 @@ class EnhancedMainWindow(MainWindow):
         scope_name = QLabel("Games to record")
         scope_name.setObjectName("SettingName")
         scope_help = QLabel(
-            "Ranked games only includes Solo/Duo and Ranked Flex. "
-            "Exclude ARAM skips standard ARAM and ARAM variants."
+            "Choose all games, no ARAM, all ranked, Solo/Duo, Flex, or Normal Draft. "
+            "The decision is made before FFmpeg and audio capture start."
         )
         scope_help.setObjectName("CardMuted")
         scope_help.setWordWrap(True)
@@ -227,6 +237,15 @@ class EnhancedMainWindow(MainWindow):
         self.recording_scope_combo.addItem(
             "Ranked games only", RECORDING_SCOPE_RANKED_ONLY
         )
+        self.recording_scope_combo.addItem(
+            "Ranked Solo/Duo only", RECORDING_SCOPE_SOLO_DUO_ONLY
+        )
+        self.recording_scope_combo.addItem(
+            "Ranked Flex only", RECORDING_SCOPE_FLEX_ONLY
+        )
+        self.recording_scope_combo.addItem(
+            "Normal Draft only", RECORDING_SCOPE_NORMAL_DRAFT_ONLY
+        )
         current_scope = str(
             getattr(self.config, "recording_scope", RECORDING_SCOPE_ALL)
             or RECORDING_SCOPE_ALL
@@ -241,6 +260,29 @@ class EnhancedMainWindow(MainWindow):
         scope_row.addWidget(self.recording_scope_combo)
         section_layout.addLayout(scope_row)
 
+        self.recording_skip_custom_checkbox = QCheckBox("Skip custom games")
+        self.recording_skip_custom_checkbox.setChecked(
+            bool(getattr(self.config, "recording_skip_custom_games", False))
+        )
+        self.recording_skip_custom_checkbox.setToolTip(
+            "Prevents custom lobbies from starting the recording buffer."
+        )
+        section_layout.addWidget(self.recording_skip_custom_checkbox)
+
+        self.recording_skip_arena_checkbox = QCheckBox("Skip Arena")
+        self.recording_skip_arena_checkbox.setChecked(
+            bool(getattr(self.config, "recording_skip_arena", False))
+        )
+        self.recording_skip_arena_checkbox.setToolTip(
+            "Prevents Arena queues from starting the recording buffer."
+        )
+        section_layout.addWidget(self.recording_skip_arena_checkbox)
+
+        self.lcu_lifecycle_status = QLabel()
+        self.lcu_lifecycle_status.setObjectName("CardMuted")
+        self.lcu_lifecycle_status.setWordWrap(True)
+        section_layout.addWidget(self.lcu_lifecycle_status)
+
         self.recording_policy_status = QLabel()
         self.recording_policy_status.setObjectName("InfoBanner")
         self.recording_policy_status.setWordWrap(True)
@@ -252,6 +294,12 @@ class EnhancedMainWindow(MainWindow):
         self.recording_scope_combo.currentIndexChanged.connect(
             self._recording_policy_changed
         )
+        self.recording_skip_custom_checkbox.toggled.connect(
+            self._recording_policy_changed
+        )
+        self.recording_skip_arena_checkbox.toggled.connect(
+            self._recording_policy_changed
+        )
         self._refresh_recording_policy_status()
 
         insert_index = max(0, content_layout.count() - 1)
@@ -260,10 +308,17 @@ class EnhancedMainWindow(MainWindow):
     def _recording_policy_changed(self, *_args: Any) -> None:
         enabled = self.recording_enabled_checkbox.isChecked()
         self.recording_scope_combo.setEnabled(enabled)
+        self.recording_skip_custom_checkbox.setEnabled(enabled)
+        self.recording_skip_arena_checkbox.setEnabled(enabled)
         scope = str(
             self.recording_scope_combo.currentData() or RECORDING_SCOPE_ALL
         )
-        changed = self.recording_policy.apply(enabled, scope)
+        changed = self.recording_policy.apply(
+            enabled,
+            scope,
+            self.recording_skip_custom_checkbox.isChecked(),
+            self.recording_skip_arena_checkbox.isChecked(),
+        )
         self._refresh_recording_policy_status()
         self._refresh_bottom_status()
         self._on_state_changed(self.controller.state, self.controller.detail)
@@ -276,6 +331,12 @@ class EnhancedMainWindow(MainWindow):
                 message = "Only Ranked Solo/Duo and Ranked Flex will be recorded."
             elif scope == RECORDING_SCOPE_EXCLUDE_ARAM:
                 message = "ARAM games will be skipped automatically."
+            elif scope == RECORDING_SCOPE_SOLO_DUO_ONLY:
+                message = "Only Ranked Solo/Duo will be recorded."
+            elif scope == RECORDING_SCOPE_FLEX_ONLY:
+                message = "Only Ranked Flex will be recorded."
+            elif scope == RECORDING_SCOPE_NORMAL_DRAFT_ONLY:
+                message = "Only Normal Draft will be recorded."
             else:
                 message = "All League game modes may be recorded."
             self._show_toast("RECORDING FILTER UPDATED", message)
@@ -284,26 +345,46 @@ class EnhancedMainWindow(MainWindow):
         if not hasattr(self, "recording_policy_status"):
             return
         enabled = self.recording_enabled_checkbox.isChecked()
-        scope = str(
-            self.recording_scope_combo.currentData() or RECORDING_SCOPE_ALL
-        )
+        scope_label = self.recording_scope_combo.currentText()
+        extras: list[str] = []
+        if self.recording_skip_custom_checkbox.isChecked():
+            extras.append("custom games skipped")
+        if self.recording_skip_arena_checkbox.isChecked():
+            extras.append("Arena skipped")
+
         if not enabled:
-            self.recording_policy_status.setText(
+            text = (
                 "Recording disabled — no video buffer or highlights will be created. "
-                "Live Match continues normally."
-            )
-        elif scope == RECORDING_SCOPE_RANKED_ONLY:
-            self.recording_policy_status.setText(
-                "Recording enabled for Ranked Solo/Duo and Ranked Flex only."
-            )
-        elif scope == RECORDING_SCOPE_EXCLUDE_ARAM:
-            self.recording_policy_status.setText(
-                "Recording enabled for every supported mode except ARAM and ARAM variants."
+                "Live Match and LCU lifecycle detection continue normally."
             )
         else:
-            self.recording_policy_status.setText(
-                "Recording enabled for all supported League game modes."
+            text = f"Recording filter: {scope_label}."
+            if extras:
+                text += " Additional rules: " + ", ".join(extras) + "."
+        self.recording_policy_status.setText(text)
+
+        if hasattr(self, "lcu_lifecycle_status"):
+            self.lcu_lifecycle_status.setText(
+                "League lifecycle: " + self.recording_policy.lifecycle_text()
             )
+
+    def _refresh_recording_policy_views(self) -> None:
+        self._refresh_recording_policy_status()
+        self._refresh_riot_api_status()
+        self._refresh_bottom_status()
+
+    def _on_lcu_session_changed(self, _snapshot: object) -> None:
+        self._refresh_recording_policy_views()
+
+    def _on_lcu_identity_changed(self, identity: object) -> None:
+        platform = str(getattr(self.config, "riot_platform", "") or "")
+        if hasattr(self, "riot_platform_combo") and platform:
+            index = self.riot_platform_combo.findData(platform)
+            if index >= 0:
+                self.riot_platform_combo.setCurrentIndex(index)
+        self._refresh_recording_policy_views()
+        if hasattr(self, "live_match_page"):
+            self.live_match_page.update_credentials()
 
     # ------------------------------------------------------------------
     # Riot API settings
@@ -379,6 +460,25 @@ class EnhancedMainWindow(MainWindow):
         section_layout.addWidget(show_key)
         section_layout.addWidget(self._divider())
 
+        self.auto_detect_riot_account_checkbox = QCheckBox(
+            "Detect account and server from the League Client"
+        )
+        self.auto_detect_riot_account_checkbox.setChecked(
+            bool(getattr(self.config, "auto_detect_riot_account", True))
+        )
+        self.auto_detect_riot_account_checkbox.setToolTip(
+            "Reads your logged-in Riot ID, PUUID, platform and locale from the local client."
+        )
+        self.auto_detect_riot_account_checkbox.toggled.connect(
+            self._sync_riot_region_controls
+        )
+        section_layout.addWidget(self.auto_detect_riot_account_checkbox)
+
+        self.detected_riot_account_status = QLabel()
+        self.detected_riot_account_status.setObjectName("CardMuted")
+        self.detected_riot_account_status.setWordWrap(True)
+        section_layout.addWidget(self.detected_riot_account_status)
+
         region_row = QHBoxLayout()
         region_copy = QVBoxLayout()
         region_name = QLabel("League server")
@@ -415,6 +515,7 @@ class EnhancedMainWindow(MainWindow):
         self.riot_platform_combo.setCurrentIndex(current_index if current_index >= 0 else 0)
         region_row.addWidget(self.riot_platform_combo)
         section_layout.addLayout(region_row)
+        self._sync_riot_region_controls()
 
         actions = QHBoxLayout()
         get_key = QPushButton("Get a Riot API key")
@@ -454,29 +555,66 @@ class EnhancedMainWindow(MainWindow):
                 return
 
         self.config.riot_api_key = key
-        self.config.riot_platform = str(
-            self.riot_platform_combo.currentData() or "euw1"
-        )
+        auto_detect = self.auto_detect_riot_account_checkbox.isChecked()
+        self.config.auto_detect_riot_account = auto_detect
+        if not auto_detect or not str(getattr(self.config, "detected_riot_platform", "") or ""):
+            self.config.riot_platform = str(
+                self.riot_platform_combo.currentData() or "euw1"
+            )
         self.config.save_user_settings()
+        self.recording_policy.set_auto_detect_identity(auto_detect)
         self._refresh_riot_api_status()
         self.live_match_page.update_credentials()
         self._show_toast(
             "RIOT API SETTINGS UPDATED",
-            "Live Match will refresh using your saved key and selected server."
+            "Live Match will refresh using your saved key and detected League account."
+            if key and auto_detect
+            else "Live Match will refresh using your saved key and selected server."
             if key
             else "The API key was cleared. Live Match will still show the local roster.",
         )
 
+    def _sync_riot_region_controls(self, *_args: Any) -> None:
+        if not hasattr(self, "riot_platform_combo"):
+            return
+        automatic = self.auto_detect_riot_account_checkbox.isChecked()
+        self.riot_platform_combo.setEnabled(not automatic)
+        if automatic:
+            platform = str(getattr(self.config, "riot_platform", "") or "")
+            index = self.riot_platform_combo.findData(platform)
+            if index >= 0:
+                self.riot_platform_combo.setCurrentIndex(index)
+
     def _refresh_riot_api_status(self) -> None:
         if not hasattr(self, "riot_api_status"):
             return
-        if self.riot_api_key_input.text().strip():
+        identity_text = self.recording_policy.identity_text()
+        automatic = bool(getattr(self.config, "auto_detect_riot_account", True))
+        if hasattr(self, "auto_detect_riot_account_checkbox"):
+            automatic = self.auto_detect_riot_account_checkbox.isChecked()
+        if hasattr(self, "detected_riot_account_status"):
+            self.detected_riot_account_status.setText(
+                f"Detected account: {identity_text}"
+                if identity_text
+                else "Detected account: waiting for the League Client"
+            )
+
+        key_configured = bool(self.riot_api_key_input.text().strip())
+        if key_configured and automatic:
             self.riot_api_status.setText(
-                "API key configured. Open Live Match after the game starts to test it."
+                "API key configured. Account and server follow the logged-in League Client automatically."
+            )
+        elif key_configured:
+            self.riot_api_status.setText(
+                "API key configured. The manually selected server will be used."
+            )
+        elif automatic:
+            self.riot_api_status.setText(
+                "No API key configured. Account and server are detected locally, but ranked stats stay hidden."
             )
         else:
             self.riot_api_status.setText(
-                "No API key configured. The Live Match page can detect players, but ranked stats stay hidden."
+                "No API key configured. Live Match can show the local roster, but ranked stats stay hidden."
             )
 
     def _open_riot_api_settings(self) -> None:
@@ -840,10 +978,10 @@ class EnhancedMainWindow(MainWindow):
         )
         self._refresh_recording_timer_visibility()
 
-        live_text = str(
-            getattr(self.controller, "event_status_text", "Waiting for League data")
-            or "Waiting for League data"
-        )
+        live_text = self.recording_policy.lifecycle_text()
+        identity_text = self.recording_policy.identity_text()
+        if identity_text:
+            live_text = f"{live_text} · {identity_text}"
         self.bottom_live_text.setText(live_text)
 
         self.bottom_profile_text.setText(

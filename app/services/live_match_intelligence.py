@@ -339,10 +339,19 @@ class EncounterStore:
                 entries = record.setdefault("entries", [])
                 entries.append(
                     {
-                        "timestamp": now,
+                        "timestamp": float(item.get("timestamp", 0) or now),
                         "relation": relation,
                         "champion": str(item.get("champion", "") or ""),
                         "my_champion": str(item.get("my_champion", "") or ""),
+                        "won": item.get("won") if isinstance(item.get("won"), bool) else None,
+                        "result": str(item.get("result", "") or ""),
+                        "my_kda": str(item.get("my_kda", "") or ""),
+                        "their_kda": str(item.get("their_kda", "") or ""),
+                        "queue_id": int(item.get("queue_id", 0) or 0),
+                        "match_id": str(item.get("match_id", "") or ""),
+                        "game_signature": str(
+                            item.get("game_signature", "") or signature
+                        ),
                     }
                 )
                 if len(entries) > self.MAX_ENTRIES_PER_PLAYER:

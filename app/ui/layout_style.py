@@ -796,8 +796,18 @@ QLabel#LiveMatchStatusDot[state="champ_select"] {
 
 /* Live Match V16 — slightly denser cards */
 QFrame#LiveStackedPlayerCard {
-    min-height: 180px;
-    max-height: 194px;
+    min-height: 218px;
 }
+
+
+
+/* Live Match V19 — full-width readable tag stack */
+QLabel#LiveStackedTag,
+QLabel#LiveStackedTagMore {
+    min-height: 19px;
+    padding: 2px 6px;
+    font-size: 8px;
+}
+
 
 """

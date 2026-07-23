@@ -37,7 +37,17 @@ class AppConfig:
     # Master recording control and queue filter. Live Match analysis remains
     # available even when highlight recording is disabled.
     recording_enabled: bool = True
-    recording_scope: str = "all"  # all, exclude_aram, ranked_only
+    recording_scope: str = "all"  # all, exclude_aram, ranked_only, solo_duo_only, flex_only, normal_draft_only
+    recording_skip_custom_games: bool = False
+    recording_skip_arena: bool = False
+
+    # When enabled, the local League Client supplies the logged-in Riot ID, PUUID,
+    # platform and locale. The manual platform remains as an offline fallback.
+    auto_detect_riot_account: bool = True
+    detected_riot_id: str = ""
+    detected_riot_puuid: str = ""
+    detected_riot_platform: str = ""
+    detected_client_locale: str = ""
 
     auto_start: bool = True
     launch_with_windows: bool = False
@@ -131,6 +141,13 @@ class AppConfig:
             "microphone_volume",
             "recording_enabled",
             "recording_scope",
+            "recording_skip_custom_games",
+            "recording_skip_arena",
+            "auto_detect_riot_account",
+            "detected_riot_id",
+            "detected_riot_puuid",
+            "detected_riot_platform",
+            "detected_client_locale",
             "auto_start",
             "launch_with_windows",
             "start_minimized",
@@ -192,9 +209,30 @@ class AppConfig:
             self.recording_enabled = True
         if (
             not isinstance(self.recording_scope, str)
-            or self.recording_scope not in {"all", "exclude_aram", "ranked_only"}
+            or self.recording_scope not in {
+                "all",
+                "exclude_aram",
+                "ranked_only",
+                "solo_duo_only",
+                "flex_only",
+                "normal_draft_only",
+            }
         ):
             self.recording_scope = "all"
+        if not isinstance(self.recording_skip_custom_games, bool):
+            self.recording_skip_custom_games = False
+        if not isinstance(self.recording_skip_arena, bool):
+            self.recording_skip_arena = False
+        if not isinstance(self.auto_detect_riot_account, bool):
+            self.auto_detect_riot_account = True
+        for key in (
+            "detected_riot_id",
+            "detected_riot_puuid",
+            "detected_riot_platform",
+            "detected_client_locale",
+        ):
+            if not isinstance(getattr(self, key), str):
+                setattr(self, key, "")
         if not isinstance(self.launch_with_windows, bool):
             self.launch_with_windows = False
         if not isinstance(self.start_minimized, bool):
