@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
+import threading
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.models import RecorderState
+from app.services.riot_api_validator import RiotApiValidationResult, validate_riot_api_key
 from app.services.recording_policy import (
     RECORDING_SCOPE_ALL,
     RECORDING_SCOPE_EXCLUDE_ARAM,
@@ -174,13 +176,19 @@ class MatchSummaryThumbnail(RoundedThumbnail):
 
 
 class EnhancedMainWindow(MainWindow):
+    riot_api_validation_finished = Signal(object)
     """Presentation and navigation enhancements layered over the stable app."""
 
     def __init__(self, config, controller, update_manager=None) -> None:
         _install_sharp_thumbnail_painting()
         self._recording_seconds = 0
+        self._riot_api_validation_token = 0
+        self._riot_api_validation_state = "idle"
+        self._riot_api_validation_message = ""
+        self._pending_riot_api_settings: tuple[str, bool, str] | None = None
         self.recording_policy = install_recording_policy(controller, config)
         super().__init__(config, controller, update_manager)
+        self.riot_api_validation_finished.connect(self._on_riot_api_validation_finished)
         self.sidebar.setFixedWidth(58)
         self.highlights_nav.setText("")
         self.highlights_nav.setToolTip("Highlights")
@@ -217,6 +225,12 @@ class EnhancedMainWindow(MainWindow):
         self._apply_highlight_filters()
         self._refresh_bottom_status()
         self._refresh_recording_policy_views()
+
+        self.riot_api_recheck_timer = QTimer(self)
+        self.riot_api_recheck_timer.setInterval(15 * 60 * 1000)
+        self.riot_api_recheck_timer.timeout.connect(self._validate_saved_riot_api_key)
+        self.riot_api_recheck_timer.start()
+        QTimer.singleShot(900, self._validate_saved_riot_api_key)
 
     # ------------------------------------------------------------------
     # Live Match
@@ -609,12 +623,12 @@ class EnhancedMainWindow(MainWindow):
         get_key.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl("https://developer.riotgames.com/"))
         )
-        save = QPushButton("Save Riot API settings")
-        save.setObjectName("PrimaryButton")
-        save.clicked.connect(self._save_riot_api_settings)
+        self.riot_api_save_button = QPushButton("Save Riot API settings")
+        self.riot_api_save_button.setObjectName("PrimaryButton")
+        self.riot_api_save_button.clicked.connect(self._save_riot_api_settings)
         actions.addWidget(get_key)
         actions.addStretch()
-        actions.addWidget(save)
+        actions.addWidget(self.riot_api_save_button)
         section_layout.addLayout(actions)
 
         self.riot_api_status = QLabel()
@@ -629,36 +643,108 @@ class EnhancedMainWindow(MainWindow):
 
     def _save_riot_api_settings(self) -> None:
         key = self.riot_api_key_input.text().strip()
-        if key and not key.startswith("RGAPI-"):
-            result = QMessageBox.question(
-                self,
-                "Save Riot API key?",
-                "This key does not begin with RGAPI-. Save it anyway?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if result != QMessageBox.StandardButton.Yes:
-                return
-
-        self.config.riot_api_key = key
         auto_detect = self.auto_detect_riot_account_checkbox.isChecked()
+        platform = str(self.riot_platform_combo.currentData() or "euw1")
+
+        if not key:
+            self._persist_riot_api_settings("", auto_detect, platform)
+            self._riot_api_validation_state = "missing"
+            self._riot_api_validation_message = "The API key was cleared."
+            self._refresh_riot_api_status()
+            self._show_toast(
+                "RIOT API KEY CLEARED",
+                "Live Match can still show the local roster, but ranked statistics are disabled.",
+            )
+            return
+
+        if not key.startswith("RGAPI-"):
+            self._riot_api_validation_state = "invalid"
+            self._riot_api_validation_message = "Riot API keys must begin with RGAPI-."
+            self._refresh_riot_api_status()
+            QMessageBox.warning(
+                self,
+                "Invalid Riot API key",
+                "The key was not saved because it does not begin with RGAPI-.",
+            )
+            return
+
+        self._pending_riot_api_settings = (key, auto_detect, platform)
+        self._start_riot_api_validation(key, platform, save_after_success=True)
+
+    def _persist_riot_api_settings(self, key: str, auto_detect: bool, platform: str) -> None:
+        self.config.riot_api_key = key
         self.config.auto_detect_riot_account = auto_detect
         if not auto_detect or not str(getattr(self.config, "detected_riot_platform", "") or ""):
-            self.config.riot_platform = str(
-                self.riot_platform_combo.currentData() or "euw1"
-            )
+            self.config.riot_platform = platform
         self.config.save_user_settings()
         self.recording_policy.set_auto_detect_identity(auto_detect)
-        self._refresh_riot_api_status()
         self.live_match_page.update_credentials()
-        self._show_toast(
-            "RIOT API SETTINGS UPDATED",
-            "Live Match will refresh using your saved key and detected League account."
-            if key and auto_detect
-            else "Live Match will refresh using your saved key and selected server."
-            if key
-            else "The API key was cleared. Live Match will still show the local roster.",
-        )
+
+    def _validate_saved_riot_api_key(self) -> None:
+        key = str(getattr(self.config, "riot_api_key", "") or "").strip()
+        if not key:
+            return
+        platform = str(getattr(self.config, "riot_platform", "euw1") or "euw1")
+        self._start_riot_api_validation(key, platform, save_after_success=False)
+
+    def _start_riot_api_validation(
+        self,
+        key: str,
+        platform: str,
+        *,
+        save_after_success: bool,
+    ) -> None:
+        self._riot_api_validation_token += 1
+        token = self._riot_api_validation_token
+        self._riot_api_validation_state = "checking"
+        self._riot_api_validation_message = "Checking the key with Riot Games..."
+        if hasattr(self, "riot_api_save_button"):
+            self.riot_api_save_button.setEnabled(False)
+            self.riot_api_save_button.setText("Checking key...")
+        self._refresh_riot_api_status()
+
+        def worker() -> None:
+            result = validate_riot_api_key(key, platform)
+            self.riot_api_validation_finished.emit((token, save_after_success, result))
+
+        threading.Thread(target=worker, name="RiotApiKeyValidation", daemon=True).start()
+
+    def _on_riot_api_validation_finished(self, payload: object) -> None:
+        token, save_after_success, result = payload
+        if token != self._riot_api_validation_token:
+            return
+        if hasattr(self, "riot_api_save_button"):
+            self.riot_api_save_button.setEnabled(True)
+            self.riot_api_save_button.setText("Save Riot API settings")
+
+        assert isinstance(result, RiotApiValidationResult)
+        self._riot_api_validation_state = result.state
+        self._riot_api_validation_message = result.message
+
+        if save_after_success:
+            pending = self._pending_riot_api_settings
+            self._pending_riot_api_settings = None
+            if result.valid and pending is not None:
+                key, auto_detect, platform = pending
+                self._persist_riot_api_settings(key, auto_detect, platform)
+                self._show_toast(
+                    "RIOT API KEY VERIFIED",
+                    "The key is valid and Live Match has been updated.",
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Riot API key was not saved",
+                    result.message,
+                )
+        elif not result.valid and result.definitive:
+            self._show_toast(
+                "RIOT API KEY EXPIRED" if result.state == "expired" else "RIOT API KEY INVALID",
+                result.message,
+                error=True,
+            )
+
+        self._refresh_riot_api_status()
 
     def _sync_riot_region_controls(self, *_args: Any) -> None:
         if not hasattr(self, "riot_platform_combo"):
@@ -686,6 +772,21 @@ class EnhancedMainWindow(MainWindow):
             )
 
         key_configured = bool(self.riot_api_key_input.text().strip())
+        state = self._riot_api_validation_state
+        message = self._riot_api_validation_message
+        if state == "checking":
+            self.riot_api_status.setText("Checking API key with Riot Games...")
+            return
+        if state == "valid":
+            suffix = " Account and server follow the logged-in League Client automatically." if automatic else " The manually selected server will be used."
+            self.riot_api_status.setText("API key verified and active." + suffix)
+            return
+        if state in {"expired", "invalid"}:
+            self.riot_api_status.setText(message or "The Riot API key is no longer valid. Replace it before using ranked statistics.")
+            return
+        if state == "unavailable":
+            self.riot_api_status.setText(message or "The key could not be checked because Riot Games is temporarily unavailable.")
+            return
         if key_configured and automatic:
             self.riot_api_status.setText(
                 "API key configured. Account and server follow the logged-in League Client automatically."
