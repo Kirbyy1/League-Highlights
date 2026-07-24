@@ -25,7 +25,7 @@ from app.services.live_match_client_asset_provider import LiveMatchClientAssetPr
 from app.services.live_match_scout import LiveMatchScout
 
 
-LIVE_MATCH_UI_BUILD = "V21-UNCAPPED-STRICT-LARGE-SAMPLE-TAGS"
+LIVE_MATCH_UI_BUILD = "V29-RELIABLE-PROGRESSIVE-SMART-WINDOWS"
 
 _ROLE_NAMES = {
     "TOP": "Top",
@@ -47,7 +47,7 @@ class PlayerScoutCard(QFrame):
         self.latest_stats: dict[str, Any] = {}
         self.player_key = str(player.get("player_key", ""))
         self.role_code = str(player.get("role", "") or "").upper()
-        self.rank_tier = "UNRANKED"
+        self.rank_tier = ""
 
         champion = str(player.get("champion", "Unknown") or "Unknown")
         self.champion_name = champion
@@ -137,15 +137,6 @@ class PlayerScoutCard(QFrame):
         self.quick_line.setWordWrap(True)
         rank_texts.addWidget(self.quick_line)
 
-        self.previous_rank_label = QLabel("Last season: —")
-        self.previous_rank_label.setObjectName("LivePreviousSeasonRank")
-        self.previous_rank_label.setWordWrap(True)
-        self.previous_rank_label.setToolTip(
-            "Previous-season rank is shown only when Riot reports it or when "
-            "League Highlights has a saved rank snapshot from an earlier season."
-        )
-        rank_texts.addWidget(self.previous_rank_label)
-
         rank_row.addLayout(rank_texts, 1)
         root.addLayout(rank_row)
 
@@ -192,7 +183,7 @@ class PlayerScoutCard(QFrame):
 
     def _apply_default_icons(self) -> None:
         self.set_role_icon(self.role_code)
-        self.set_rank_icon("UNRANKED", "")
+        self.set_rank_icon("", "")
 
     def set_champion_icon(self, source: QPixmap) -> None:
         if source.isNull():
@@ -222,7 +213,13 @@ class PlayerScoutCard(QFrame):
         )
 
     def set_rank_icon(self, tier: str, division: str) -> None:
-        self.rank_tier = str(tier or "UNRANKED").upper()
+        self.rank_tier = str(tier or "").upper()
+        if self.rank_tier in {"", "LOADING", "UNAVAILABLE"}:
+            self.rank_icon.clear()
+            self.rank_icon.setToolTip(
+                "Rank loading" if self.rank_tier != "UNAVAILABLE" else "Rank unavailable"
+            )
+            return
         self.rank_icon.setPixmap(make_rank_emblem(self.rank_tier, division, 54))
         self.rank_icon.setToolTip(self.rank_tier.title())
 
@@ -239,17 +236,72 @@ class PlayerScoutCard(QFrame):
         )
 
     def set_waiting_for_key(self) -> None:
-        self.rank_label.setText("API key required")
-        self.quick_line.setText("Roster detected locally")
-        self.previous_rank_label.setText("Last season: —")
+        self.rank_label.setText("Local scouting unavailable")
+        self.quick_line.setText("Riot API fallback is not configured")
         self.level_chip.setText("Lv —")
         self._set_tags([])
         self.setToolTip(
-            "Rank, account level and scouting tags require a Riot development API key."
+            "The local League client did not expose this player. A Riot API key can be used as a fallback."
         )
 
+    def update_identity(self, stats: dict[str, Any]) -> None:
+        riot_id = str(stats.get("riot_id", "") or "").strip()
+        game_name = str(stats.get("game_name", "") or "").strip()
+        tag_line = str(stats.get("tag_line", "") or "").strip()
+        display = riot_id or (f"{game_name}#{tag_line}" if game_name and tag_line else game_name)
+        if display and not display.casefold().startswith("player "):
+            self.name_label.setText(display)
+            self.name_label.setToolTip(display)
+            self.player["riot_id"] = display
+
+    @staticmethod
+    def _merge_stats(
+        previous: dict[str, Any],
+        incoming: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not previous:
+            return dict(incoming)
+        merged = dict(previous)
+        incoming_state = str(incoming.get("state", "") or "")
+        previous_state = str(previous.get("state", "") or "")
+        order = {"": 0, "partial": 1, "fast": 2, "ready": 3}
+
+        if incoming_state in {"error", "unavailable"} and previous_state in {"partial", "fast", "ready"}:
+            merged["last_error"] = str(incoming.get("message", "") or "")
+            return merged
+
+        if order.get(incoming_state, 0) < order.get(previous_state, 0):
+            safe_keys = {
+                "riot_id", "game_name", "tag_line", "account_level",
+                "profile_icon_id", "rank_source", "history_source",
+                "mastery_source", "cache_age_seconds",
+            }
+            for key in safe_keys:
+                value = incoming.get(key)
+                if value not in {None, ""}:
+                    merged[key] = value
+        else:
+            merged.update(incoming)
+
+        incoming_rank_state = str(incoming.get("rank_state", "") or "")
+        previous_rank_state = str(previous.get("rank_state", "") or "")
+        if (
+            incoming_rank_state in {"", "loading", "unavailable"}
+            and previous_rank_state in {"ready", "unranked"}
+        ):
+            for key in (
+                "rank", "tier", "division", "lp", "wins", "losses",
+                "games", "win_rate", "ranked_games", "ranked_win_rate",
+                "rank_state", "rank_source",
+            ):
+                if key in previous:
+                    merged[key] = previous[key]
+        return merged
+
     def apply_stats(self, stats: dict[str, Any]) -> None:
-        self.latest_stats = dict(stats)
+        self.latest_stats = self._merge_stats(self.latest_stats, dict(stats))
+        stats = self.latest_stats
+        self.update_identity(stats)
         state = str(stats.get("state", ""))
 
         account_level = stats.get("account_level")
@@ -258,7 +310,8 @@ class PlayerScoutCard(QFrame):
         )
 
         role_code = str(
-            stats.get("inferred_role", "")
+            stats.get("assigned_role", "")
+            or stats.get("inferred_role", "")
             or stats.get("current_role", "")
             or stats.get("main_role", "")
             or self.role_code
@@ -282,13 +335,11 @@ class PlayerScoutCard(QFrame):
             self.role_label.setToolTip("")
         self.set_role_icon(role_code)
 
-        tier = str(stats.get("tier", "UNRANKED") or "UNRANKED").upper()
+        rank_state = str(stats.get("rank_state", "loading") or "loading")
+        tier = str(stats.get("tier", "") or "").upper()
         division = str(stats.get("division", "") or "").upper()
-        self.set_rank_icon(tier, division)
-
-        if tier == "UNRANKED":
-            self.rank_label.setText("Unranked")
-        else:
+        if rank_state == "ready":
+            self.set_rank_icon(tier, division)
             rank_text = tier.title()
             if tier not in {"MASTER", "GRANDMASTER", "CHALLENGER"} and division:
                 rank_text += f" {division}"
@@ -296,52 +347,64 @@ class PlayerScoutCard(QFrame):
             if lp:
                 rank_text += f" · {lp} LP"
             self.rank_label.setText(rank_text)
-
-        previous_rank = str(stats.get("previous_season_rank", "") or "")
-        previous_source = str(stats.get("previous_season_source", "") or "")
-        if previous_rank:
-            self.previous_rank_label.setText(f"Last season: {previous_rank}")
-            if previous_source == "riot_reported":
-                self.previous_rank_label.setToolTip(
-                    "Previous-season rank reported in Riot player data."
-                )
-            else:
-                self.previous_rank_label.setToolTip(
-                    "Previous-season rank restored from a League Highlights "
-                    "rank snapshot saved before the season changed."
-                )
+        elif rank_state == "unranked":
+            self.set_rank_icon("UNRANKED", "")
+            self.rank_label.setText("Unranked")
+        elif rank_state == "unavailable":
+            self.set_rank_icon("UNAVAILABLE", "")
+            self.rank_label.setText("Rank unavailable")
         else:
-            self.previous_rank_label.setText("Last season: —")
-            self.previous_rank_label.setToolTip(
-                "Riot's current public League-v4 rank entry normally exposes "
-                "current Solo/Duo rank only. League Highlights will save current "
-                "ranks so this field can be filled after future season resets."
-            )
+            self.set_rank_icon("LOADING", "")
+            self.rank_label.setText("Loading rank")
 
         ranked_games = int(stats.get("ranked_games", stats.get("games", 0)) or 0)
         ranked_wr = stats.get("ranked_win_rate", stats.get("win_rate"))
-        if ranked_games and ranked_wr is not None:
-            ranked_record_text = (
-                f"Ranked WR {float(ranked_wr):.0f}% · {ranked_games} games"
-            )
-        else:
+        if rank_state == "ready" and ranked_games and ranked_wr is not None:
+            ranked_record_text = f"Ranked WR {float(ranked_wr):.0f}% · {ranked_games} games"
+        elif rank_state == "unranked":
             ranked_record_text = "No ranked Solo/Duo games"
+        elif rank_state == "unavailable":
+            ranked_record_text = "Ranked record unavailable"
+        else:
+            ranked_record_text = "Loading ranked record"
 
-        if state in {"partial", "fast"}:
-            self.quick_line.setText("Analysing ranked history")
+        if state == "partial":
+            self.quick_line.setText("Rank loaded · history loading")
             self._set_tags([])
             self._update_card_tooltip()
             return
 
-        if state != "ready":
-            self.rank_label.setText("Unavailable")
-            self.quick_line.setText(str(stats.get("message", "Player data unavailable")))
-            self._set_tags([])
-            self.setToolTip(str(stats.get("message", "Player data unavailable")))
+        sample = int(stats.get("sample_games", 0) or 0)
+        recent_wr = stats.get("recent_win_rate")
+        avg_kda = float(stats.get("avg_kda", 0) or 0)
+        cache_age = float(stats.get("cache_age_seconds", 0) or 0)
+        cache_prefix = ""
+        if cache_age > 0:
+            cache_prefix = f"Cached {max(1, int(cache_age // 60))}m · "
+
+        if state == "fast":
+            if sample and recent_wr is not None:
+                self.quick_line.setText(
+                    f"{cache_prefix}Quick {sample} · {float(recent_wr):.0f}% WR · {avg_kda:.1f} KDA"
+                )
+            else:
+                self.quick_line.setText(f"{cache_prefix}{ranked_record_text}")
+            self._set_tags(list(stats.get("tags", ())))
+            self._update_card_tooltip()
             return
 
-        self.quick_line.setText(ranked_record_text)
+        if state != "ready":
+            self.quick_line.setText(str(stats.get("message", "Player data unavailable")))
+            self._set_tags([])
+            self._update_card_tooltip()
+            return
 
+        if sample and recent_wr is not None:
+            self.quick_line.setText(
+                f"{cache_prefix}Final {sample} · {float(recent_wr):.0f}% WR · {avg_kda:.1f} KDA"
+            )
+        else:
+            self.quick_line.setText(f"{cache_prefix}{ranked_record_text}")
         self._set_tags(list(stats.get("tags", ())))
         self._update_card_tooltip()
 
@@ -364,14 +427,12 @@ class PlayerScoutCard(QFrame):
                 tooltip = ""
             if text:
                 normalized.append(
-                    {
-                        "text": text,
-                        "tone": tone,
-                        "tooltip": tooltip or text,
-                    }
+                    {"text": text, "tone": tone, "tooltip": tooltip or text}
                 )
 
-        for tag in normalized:
+        visible = normalized[:3]
+        hidden = normalized[3:]
+        for tag in visible:
             chip = QLabel(tag["text"])
             chip.setObjectName("LiveStackedTag")
             chip.setProperty("tone", tag["tone"])
@@ -384,6 +445,15 @@ class PlayerScoutCard(QFrame):
             chip.setToolTip(tag["tooltip"])
             self.tags_row.addWidget(chip)
 
+        if hidden:
+            more = QLabel(f"+{len(hidden)} more")
+            more.setObjectName("LiveStackedTag")
+            more.setProperty("tone", "neutral")
+            more.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            more.setToolTip("\n\n".join(
+                f"{tag['text']}\n{tag['tooltip']}" for tag in hidden
+            ))
+            self.tags_row.addWidget(more)
 
     def _update_card_tooltip(self) -> None:
         stats = self.latest_stats
@@ -411,33 +481,24 @@ class PlayerScoutCard(QFrame):
         lines = [
             f"<b>{escape(str(self.player.get('riot_id', 'Unknown player')))}</b>",
             f"{escape(self.champion_name)} · {escape(self.level_chip.text())}",
-            f"<b>Current Solo/Duo:</b> {escape(str(stats.get('rank', 'Unranked')))}",
+            f"<b>Current Solo/Duo:</b> {escape(str(stats.get('rank', 'Rank loading')))}",
         ]
 
         if games and season_wr is not None:
             lines.append(
                 f"<b>Ranked Solo/Duo WR:</b> {season_wr:.0f}% over {games} games"
             )
-        previous_rank = str(stats.get("previous_season_rank", "") or "")
-        previous_source = str(stats.get("previous_season_source", "") or "")
-        if previous_rank:
-            source_text = (
-                "Riot reported"
-                if previous_source == "riot_reported"
-                else "saved local snapshot"
-            )
-            lines.append(
-                f"<b>Last season:</b> {escape(previous_rank)} · {source_text}"
-            )
-        else:
-            lines.append(
-                "<b>Last season:</b> unavailable from current Riot data; "
-                "future season changes will use saved rank snapshots"
-            )
-
         if sample and recent_wr is not None:
+            windows = dict(stats.get("analysis_windows", {}) or {})
+            form_games = int(windows.get("form", stats.get("form_sample_games", min(sample, 5))) or 0)
+            performance_games = int(windows.get("performance", stats.get("performance_sample_games", min(sample, 10))) or 0)
+            role_games = int(windows.get("role", stats.get("role_sample_games", sample)) or 0)
             lines.append(
-                f"<b>Recent ranked {sample}:</b> {recent_wr:.0f}% WR · {kda:.1f} KDA · {cs:.1f} CS/min"
+                f"<b>Recent form {form_games}:</b> {recent_wr:.0f}% WR · "
+                f"<b>Performance {performance_games}:</b> {kda:.1f} KDA · {cs:.1f} CS/min"
+            )
+            lines.append(
+                f"<b>Role/champion evidence:</b> {role_games} ranked games"
             )
         if main_role != "Unknown":
             role_text = f"<b>Main role:</b> {escape(main_role)} ({role_share:.0f}%)"
@@ -484,30 +545,6 @@ class PlayerScoutCard(QFrame):
             if champion_wr is not None:
                 champ_text += f" · {champion_wr:.0f}% WR"
             lines.append(champ_text)
-
-        timeline_games = int(stats.get("timeline_games", 0) or 0)
-        if timeline_games:
-            timeline_parts = [
-                f"{float(stats.get('lead_at_10_rate', 0) or 0):.0f}% ahead at 10",
-                f"gold diff {float(stats.get('avg_gold_diff_at_10', 0) or 0):+.0f}",
-                f"CS diff {float(stats.get('avg_cs_diff_at_10', 0) or 0):+.1f}",
-                f"{float(stats.get('early_death_rate', 0) or 0):.0f}% early-death games",
-            ]
-            assigned_role = str(stats.get("assigned_role", "") or stats.get("inferred_role", "") or "")
-            if assigned_role == "JUNGLE":
-                timeline_parts.extend(
-                    [
-                        f"pre-5 gank {float(stats.get('gank_before_5_rate', 0) or 0):.0f}%",
-                        f"jungle CS@6 {float(stats.get('avg_jungle_cs_at_6', 0) or 0):.0f}",
-                    ]
-                )
-            elif assigned_role in {"MIDDLE", "UTILITY"}:
-                timeline_parts.append(
-                    f"early roam {float(stats.get('early_roam_rate', 0) or 0):.0f}%"
-                )
-            lines.append(
-                f"<b>Role timeline ({timeline_games}):</b> " + " · ".join(timeline_parts)
-            )
 
         encounter_count = int(stats.get("encounter_count", 0) or 0)
         if encounter_count:
@@ -594,6 +631,14 @@ class PlayerScoutCard(QFrame):
                 premade_text += f" · {escape(confidence)} confidence ({confidence_score}/100)"
             lines.append(premade_text)
 
+        source_bits = []
+        for key, label in (("rank_source", "rank"), ("history_source", "history"), ("mastery_source", "mastery")):
+            value = str(stats.get(key, "") or "")
+            if value:
+                source_bits.append(f"{label} {value.replace('_', ' ')}")
+        if source_bits:
+            lines.append("<b>Sources:</b> " + " · ".join(escape(bit) for bit in source_bits))
+
         percentiles = dict(stats.get("local_percentiles", {}) or {})
         benchmark_parts = []
         for key, label in (
@@ -612,7 +657,10 @@ class PlayerScoutCard(QFrame):
             )
 
         if str(stats.get("state", "")) == "fast":
-            lines.append("<i>Deep 20-game and timeline analysis is still loading.</i>")
+            target_games = int(stats.get("analysis_target_games", 30) or 30)
+            lines.append(
+                f"<i>Final {target_games}-game analysis is still loading.</i>"
+            )
 
         self.setToolTip("<br>".join(lines))
 
@@ -664,27 +712,28 @@ class TeamSection(QFrame):
             self.cards_layout.addWidget(card, 0, column)
 
     def update_summary(self) -> None:
-        ready = [
+        progressed = [
             card
             for card in self.player_cards
-            if getattr(card, "latest_stats", {}).get("state") in {"fast", "ready"}
+            if getattr(card, "latest_stats", {}).get("state") in {"partial", "fast", "ready"}
         ]
-        if not ready:
+        final = [
+            card for card in progressed
+            if card.latest_stats.get("state") == "ready"
+        ]
+        if not progressed:
             self.summary.setText("Analysing")
             return
 
-        main_roles = sum(
-            1 for card in ready if card.latest_stats.get("role_state") == "main"
+        verified_offroles = sum(
+            1 for card in final
+            if card.latest_stats.get("role_state") == "off_role"
         )
-        premades = {
-            int(card.latest_stats.get("premade_size", 0) or 0)
-            for card in ready
-            if int(card.latest_stats.get("premade_size", 0) or 0) >= 2
-        }
-
-        text = f"{main_roles}/{len(ready)} main role"
-        if premades:
-            text += " · premade " + "/".join(str(size) for size in sorted(premades))
+        text = f"{len(final)}/{len(self.player_cards)} analysed"
+        if len(final) < len(self.player_cards):
+            text += f" · quick {len(progressed)}/{len(self.player_cards)}"
+        if verified_offroles:
+            text += f" · {verified_offroles} off-role"
         self.summary.setText(text)
 
     def show_empty(self, text: str) -> None:
@@ -754,7 +803,7 @@ class LiveMatchPage(QFrame):
         api_layout = QHBoxLayout(self.api_banner)
         api_layout.setContentsMargins(10, 6, 10, 6)
         api_help = QLabel(
-            "Add a Riot API key to load ranks, levels and scouting tags."
+            "Riot API key is optional — it adds champion mastery and fallback coverage."
         )
         api_help.setObjectName("CardMuted")
         api_layout.addWidget(api_help, 1)
@@ -785,9 +834,6 @@ class LiveMatchPage(QFrame):
 
     def update_credentials(self) -> None:
         self._sync_api_banner()
-        for card in self._cards.values():
-            if not self.config.riot_api_key.strip():
-                card.set_waiting_for_key()
         self.scout.update_credentials()
 
     def _sync_api_banner(self) -> None:
@@ -801,7 +847,7 @@ class LiveMatchPage(QFrame):
 
         if state in {"key_missing", "key_invalid"}:
             self.api_banner.show()
-        elif state in {"ready", "loading", "loading_screen", "champ_select"} and self.config.riot_api_key.strip():
+        elif state in {"ready", "loading", "loading_screen", "champ_select"}:
             self.api_banner.hide()
 
     @staticmethod
@@ -864,12 +910,8 @@ class LiveMatchPage(QFrame):
             # keyed by Riot ID. Both aliases target the same persistent card.
             self._cards[riot_id_alias] = card
 
-        if not self.config.riot_api_key.strip():
-            card.set_waiting_for_key()
-
         self.icon_provider.request_icon(card.champion_name)
         self.client_asset_provider.request_role(card.role_code)
-        self.client_asset_provider.request_rank("UNRANKED")
         return card
 
     def _apply_champion_icon(self, champion_key: str, pixmap: QPixmap) -> None:
@@ -893,7 +935,8 @@ class LiveMatchPage(QFrame):
             return
 
         card.apply_stats(stats)
-        self.client_asset_provider.request_rank(card.rank_tier)
+        if card.rank_tier not in {"", "LOADING", "UNAVAILABLE"}:
+            self.client_asset_provider.request_rank(card.rank_tier)
         self.client_asset_provider.request_role(card.role_code)
         self.allies_section.update_summary()
         self.enemies_section.update_summary()

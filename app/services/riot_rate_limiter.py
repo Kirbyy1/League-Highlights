@@ -23,11 +23,13 @@ class RiotRateLimiter:
     bursting past the key's allowance.
     """
 
-    SHORT_LIMIT = 14
+    # Keep a safety margin below the usual development/personal-key limits
+    # while allowing the progressive five-game pass to fill the board faster.
+    SHORT_LIMIT = 18
     SHORT_WINDOW_SECONDS = 1.0
-    LONG_LIMIT = 82
+    LONG_LIMIT = 90
     LONG_WINDOW_SECONDS = 120.0
-    SAFETY_DELAY_SECONDS = 0.035
+    SAFETY_DELAY_SECONDS = 0.020
 
     def __init__(self) -> None:
         self._condition = threading.Condition(threading.RLock())
