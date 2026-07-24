@@ -21,11 +21,13 @@ except Exception:  # packaged builds should include psutil, but monitoring is op
 class PerformanceMonitor:
     """Low-frequency internal watchdog.
 
-    It records warnings in the diagnostic log only. It never interrupts a match
-    because a target was missed.
+    CPU is reported on the same whole-machine scale used by Windows Task
+    Manager. psutil.Process.cpu_percent() uses a one-logical-core scale, so its
+    raw result must be divided by the number of logical CPUs before comparing it
+    with an app-wide CPU target.
     """
 
-    SAMPLE_SECONDS = 30.0
+    SAMPLE_SECONDS = 45.0
     STALE_TEMP_SECONDS = 6 * 60 * 60
 
     def __init__(
@@ -65,17 +67,18 @@ class PerformanceMonitor:
     def cleanup_stale_temp_files(self) -> None:
         now = time.time()
 
-        # App rolling segments from an interrupted previous session.
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         for path in self.temp_dir.glob("segment_*.mkv"):
             try:
                 if now - path.stat().st_mtime > self.STALE_TEMP_SECONDS:
                     path.unlink()
             except OSError:
-                LOGGER.debug("Could not remove stale segment %s", path, exc_info=True)
+                LOGGER.debug(
+                    "Could not remove stale segment %s",
+                    path,
+                    exc_info=True,
+                )
 
-        # TemporaryDirectory cannot clean up after a hard crash. Only remove
-        # directories with prefixes owned by League Highlights.
         system_temp = Path(tempfile.gettempdir())
         for pattern in ("league_highlight_*", "lh-inline-filmstrip-*"):
             for path in system_temp.glob(pattern):
@@ -86,11 +89,19 @@ class PerformanceMonitor:
                     ):
                         shutil.rmtree(path, ignore_errors=True)
                 except OSError:
-                    LOGGER.debug("Could not inspect stale temp path %s", path, exc_info=True)
+                    LOGGER.debug(
+                        "Could not inspect stale temp path %s",
+                        path,
+                        exc_info=True,
+                    )
 
     def _run(self) -> None:
         process = psutil.Process()
+        logical_cpus = max(1, int(psutil.cpu_count(logical=True) or 1))
+
+        # Prime psutil's delta-based CPU calculation.
         process.cpu_percent(interval=None)
+
         try:
             self._baseline_rss = int(process.memory_info().rss)
         except Exception:
@@ -98,41 +109,68 @@ class PerformanceMonitor:
 
         while not self._stop.wait(self.SAMPLE_SECONDS):
             try:
-                cpu = float(process.cpu_percent(interval=None))
+                raw_process_cpu = float(
+                    process.cpu_percent(interval=None)
+                )
+                cpu = raw_process_cpu / logical_cpus
                 rss = int(process.memory_info().rss)
-                segment_files = list(self.temp_dir.glob("segment_*.mkv"))
+
+                segment_files = list(
+                    self.temp_dir.glob("segment_*.mkv")
+                )
                 segment_bytes = sum(
-                    path.stat().st_size for path in segment_files if path.is_file()
+                    path.stat().st_size
+                    for path in segment_files
+                    if path.is_file()
                 )
             except Exception:
-                LOGGER.debug("Performance sample failed", exc_info=True)
+                LOGGER.debug(
+                    "Performance sample failed",
+                    exc_info=True,
+                )
                 continue
 
-            idle = not self.is_recording() and not self.league_is_open()
+            idle = (
+                not self.is_recording()
+                and not self.league_is_open()
+            )
             if idle and cpu > TARGETS.idle_cpu_percent:
                 self._consecutive_idle_cpu_warnings += 1
                 if self._consecutive_idle_cpu_warnings >= 3:
                     LOGGER.warning(
-                        "Performance target: idle CPU %.2f%% is above %.2f%%",
+                        "Performance target: idle CPU %.2f%% "
+                        "is above %.2f%% "
+                        "(raw process reading %.2f%% across %s CPUs)",
                         cpu,
                         TARGETS.idle_cpu_percent,
+                        raw_process_cpu,
+                        logical_cpus,
                     )
                     self._consecutive_idle_cpu_warnings = 0
             else:
                 self._consecutive_idle_cpu_warnings = 0
 
             growth = max(0, rss - self._baseline_rss)
-            if growth > TARGETS.ram_growth_warning_mib * 1024 * 1024:
+            if (
+                growth
+                > TARGETS.ram_growth_warning_mib
+                * 1024
+                * 1024
+            ):
                 LOGGER.warning(
-                    "Performance target: process RAM grew by %.1f MiB since startup",
+                    "Performance target: process RAM grew by "
+                    "%.1f MiB since startup",
                     growth / (1024 * 1024),
                 )
-                # Move the baseline forward so one condition does not spam logs.
                 self._baseline_rss = rss
 
             LOGGER.debug(
-                "Performance sample: CPU %.2f%%, RAM %.1f MiB, segments %s / %.1f MiB",
+                "Performance sample: CPU %.2f%% "
+                "(raw %.2f%% / %s CPUs), RAM %.1f MiB, "
+                "segments %s / %.1f MiB",
                 cpu,
+                raw_process_cpu,
+                logical_cpus,
                 rss / (1024 * 1024),
                 len(segment_files),
                 segment_bytes / (1024 * 1024),

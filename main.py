@@ -4,9 +4,6 @@ import logging
 import os
 import sys
 
-# Qt Multimedia uses its bundled FFmpeg backend on Windows. Keep its developer
-# diagnostics out of normal output. These variables must be configured before
-# importing PySide6.
 os.environ["QT_FFMPEG_DEBUG"] = "0"
 _silent_qt_media_rules = (
     "qt.multimedia.ffmpeg=false;"
@@ -39,18 +36,21 @@ from app.ui.layout_style import LAYOUT_STYLE
 from app.ui.optimized_inline_player import OptimizedInlineHighlightPlayer
 from app.ui.performance_main_window import PerformanceMainWindow
 from app.ui.polish_style import POLISH_STYLE
+from app.ui.reference_card_layout_patch import install_reference_card_layout
+from app.services.live_match_speed_patch import install_live_match_speedups
+from app.ui.fake_match_debug import install_fake_match_debug
 
-# RecorderController resolves these names from app.controller when an instance
-# is created. Replacing the implementations here keeps the mature controller,
-# settings, exporter signals, updater, and UI behavior intact.
 controller_module.FfmpegTools = ReliableFfmpegTools
 controller_module.VideoSegmentRecorder = ReliableVideoSegmentRecorder
 controller_module.ClipExporter = ReliableClipExporter
 controller_module.ClipLibrary = CachedClipLibrary
 controller_module.LeagueEventMonitor = LeagueEventMonitorV2
 
-# MainWindow resolves InlineHighlightPlayer from its module at runtime.
 main_window_module.InlineHighlightPlayer = OptimizedInlineHighlightPlayer
+
+install_live_match_speedups()
+install_reference_card_layout()
+install_fake_match_debug()
 
 from app.controller_performance import PerformanceRecorderController
 
