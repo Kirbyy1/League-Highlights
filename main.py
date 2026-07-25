@@ -39,6 +39,11 @@ from app.ui.polish_style import POLISH_STYLE
 from app.ui.reference_card_layout_patch import install_reference_card_layout
 from app.services.live_match_speed_patch import install_live_match_speedups
 from app.ui.fake_match_debug import install_fake_match_debug
+from app.ui.rank_record_ui_guard import install_rank_record_ui_guard
+from app.ui.local_only_api_patch import (
+    install_local_only_api_removal,
+    prepare_local_only_config,
+)
 
 controller_module.FfmpegTools = ReliableFfmpegTools
 controller_module.VideoSegmentRecorder = ReliableVideoSegmentRecorder
@@ -50,7 +55,9 @@ main_window_module.InlineHighlightPlayer = OptimizedInlineHighlightPlayer
 
 install_live_match_speedups()
 install_reference_card_layout()
+install_rank_record_ui_guard()
 install_fake_match_debug()
+install_local_only_api_removal()
 
 from app.controller_performance import PerformanceRecorderController
 
@@ -60,6 +67,7 @@ def main() -> int:
         print("League Highlights currently supports Windows 10/11 only. Be careful")
 
     config = AppConfig.create_default()
+    prepare_local_only_config(config)
     configure_logging(config.log_dir)
     logging.info("Starting League Highlights")
 
