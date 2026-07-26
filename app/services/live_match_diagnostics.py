@@ -11,8 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from app.services.lcu_failure_diagnostics import (
+    classify_exception,
+    exception_chain,
+)
 
-LIVE_MATCH_DIAGNOSTICS_BUILD = "V12-COMPACT-CYCLE-DIAGNOSTICS"
+
+LIVE_MATCH_DIAGNOSTICS_BUILD = "V13-LCU-ROOT-CAUSE-DIAGNOSTICS"
 MAX_LOG_BYTES = 10 * 1024 * 1024
 _DIAGNOSTICS_LOCK = threading.RLock()
 _DIAGNOSTICS_REFS: list[weakref.ReferenceType[LiveMatchDiagnostics]] = []
@@ -317,12 +322,9 @@ class LiveMatchDiagnostics:
         return "other"
 
     def request_finished(self, endpoint: str, duration_s: float, *, payload: Any = None,
-                         error: BaseException | None = None) -> None:
+                         error: BaseException | None = None,
+                         metadata: dict[str, Any] | None = None) -> None:
         category = self.endpoint_category(endpoint)
-        self._request_count[category] += 1
-        self._request_durations[category].append(float(duration_s))
-        if error is not None:
-            self._request_failures[category] += 1
         response = summarize_response(endpoint, payload) if error is None else None
         signature_payload = {
             "endpoint": endpoint, "success": error is None,
@@ -332,18 +334,29 @@ class LiveMatchDiagnostics:
         signature = json.dumps(_safe_value(signature_payload), ensure_ascii=False, sort_keys=True)
         dedup_key = f"{category}:{endpoint}"
         now = time.monotonic()
-        previous = self._last_request_signature.get(dedup_key)
         window = 5.0 if error is not None else 15.0
-        if category in _NOISY_CATEGORIES and previous and previous[0] == signature and now - previous[1] < window:
-            self._suppressed[dedup_key] += 1
-            return
-        suppressed = int(self._suppressed.pop(dedup_key, 0))
-        self._last_request_signature[dedup_key] = (signature, now)
+        with self._lock:
+            self._request_count[category] += 1
+            self._request_durations[category].append(float(duration_s))
+            if error is not None:
+                self._request_failures[category] += 1
+            previous = self._last_request_signature.get(dedup_key)
+            if category in _NOISY_CATEGORIES and previous and previous[0] == signature and now - previous[1] < window:
+                self._suppressed[dedup_key] += 1
+                return
+            suppressed = int(self._suppressed.pop(dedup_key, 0))
+            self._last_request_signature[dedup_key] = (signature, now)
+        failure_class = classify_exception(error) if error is not None else ""
+        chain = exception_chain(error) if error is not None else []
         self.event(
             "lcu_request", endpoint=endpoint, category=category,
             duration_ms=round(float(duration_s) * 1000.0, 2), success=error is None,
             error_type=type(error).__name__ if error is not None else "",
-            error=str(error) if error is not None else "", response=response,
+            error=str(error) if error is not None else "",
+            failure_class=failure_class,
+            exception_chain=chain,
+            request_metadata=dict(metadata or {}),
+            response=response,
             suppressed_identical_requests=suppressed,
         )
 
@@ -453,7 +466,12 @@ def active_diagnostics() -> list[LiveMatchDiagnostics]:
     return active
 
 
-def record_lcu_request(endpoint: str, operation: Callable[[], Any]) -> Any:
+def record_lcu_request(
+    endpoint: str,
+    operation: Callable[[], Any],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> Any:
     diagnostics = active_diagnostics()
     started = time.perf_counter()
     try:
@@ -461,9 +479,9 @@ def record_lcu_request(endpoint: str, operation: Callable[[], Any]) -> Any:
     except BaseException as exc:
         duration = time.perf_counter() - started
         for trace in diagnostics:
-            trace.request_finished(endpoint, duration, error=exc)
+            trace.request_finished(endpoint, duration, error=exc, metadata=metadata)
         raise
     duration = time.perf_counter() - started
     for trace in diagnostics:
-        trace.request_finished(endpoint, duration, payload=payload)
+        trace.request_finished(endpoint, duration, payload=payload, metadata=metadata)
     return payload

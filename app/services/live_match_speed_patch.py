@@ -13,6 +13,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from app.services.lcu_failure_diagnostics import (
+    ActiveRequestTracker,
+    diagnose_lcu_failure,
+)
+
 from app.services.live_match_diagnostics import (
     LiveMatchDiagnostics,
     active_diagnostics,
@@ -31,7 +36,7 @@ from app.services.live_match_performance_helpers import (
 
 
 LOGGER = logging.getLogger(__name__)
-LIVE_MATCH_SPEED_BUILD = "V12-SINGLE-FLIGHT-ONE-MATCH"
+LIVE_MATCH_SPEED_BUILD = "V14-BENCHMARK-METRICS"
 
 # The recorder already requests these Live Client resources. Live Match reuses the
 # most recent snapshots instead of downloading the same JSON a second time.
@@ -47,6 +52,24 @@ _LCU_SHARED_CACHE: dict[str, tuple[float, Any]] = {}
 _LCU_SHARED_FAILURES: dict[str, tuple[float, str]] = {}
 _LCU_SHARED_INFLIGHT: dict[str, threading.Event] = {}
 _SNAPSHOT_WAIT_LOG_AT = 0.0
+_LCU_REQUEST_TRACKER = ActiveRequestTracker()
+_FAILURE_PROBE_LOCK = threading.Lock()
+_FAILURE_PROBE_STATE_LOCK = threading.RLock()
+_LAST_FAILURE_PROBE_AT = 0.0
+_FAILURE_PROBE_MIN_INTERVAL_SECONDS = 0.75
+
+
+def _benchmark_metric(scout: Any, key: str, value: float = 1.0, *, maximum: bool = False) -> None:
+    metrics = getattr(scout, "_live_match_benchmark_metrics", None)
+    if not isinstance(metrics, dict):
+        return
+    lock = getattr(scout, "_live_match_benchmark_metrics_lock", None)
+    if lock is None:
+        lock = threading.RLock()
+        scout._live_match_benchmark_metrics_lock = lock
+    with lock:
+        current = float(metrics.get(key, 0.0) or 0.0)
+        metrics[key] = max(current, float(value)) if maximum else current + float(value)
 
 
 def _snapshot_key(endpoint: str) -> str:
@@ -304,6 +327,8 @@ def install_live_match_speedups() -> None:
         self._lean_roster_logged_key = ""
         self._lean_request_counts = {"rank": 0, "history": 0}
         self._lean_last_load_seconds = 0.0
+        self._live_match_benchmark_metrics = None
+        self._live_match_benchmark_metrics_lock = threading.RLock()
         self._live_match_diagnostics = LiveMatchDiagnostics(self.config)
         register_diagnostics(self._live_match_diagnostics)
         self._live_match_diagnostics.event(
@@ -493,6 +518,8 @@ def install_live_match_speedups() -> None:
     original_refresh = LiveMatchScout.refresh
 
     def lean_refresh(self: Any, force: bool = False) -> None:
+        if bool(getattr(self, "_live_match_benchmark_running", False)):
+            return
         if force:
             # Manual Refresh is the one explicit way to request fresh data again
             # for the same match.
@@ -708,7 +735,10 @@ def install_live_match_speedups() -> None:
                     f"/lol-ranked/v1/ranked-stats/{encoded}",
                 )
                 for endpoint in endpoints:
+                    _benchmark_metric(self, "rank_endpoint_attempts")
                     payload = self._lcu.get_json_optional(endpoint, None)
+                    if isinstance(payload, (dict, list)) and payload:
+                        _benchmark_metric(self, "rank_endpoint_successes")
                     diagnostics = getattr(self, "_live_match_diagnostics", None)
                     if diagnostics is not None:
                         diagnostics.event(
@@ -783,6 +813,8 @@ def install_live_match_speedups() -> None:
             resolved = local_identity_candidates(self, player) if player else []
             resolved = [value for value in resolved if value not in candidates]
             if resolved:
+                _benchmark_metric(self, "rank_identity_fallbacks")
+            if resolved:
                 result = try_candidates(resolved)
                 if result is not None:
                     return result
@@ -845,16 +877,55 @@ def install_live_match_speedups() -> None:
                 f"/lol-match-history/v1/products/lol/{encoded}/matches"
                 f"?begIndex={begin}&endIndex={end}"
             )
+            diagnostics = getattr(self, "_live_match_diagnostics", None)
             for attempt in range(2):
-                with history_gate:
+                gate_started = time.perf_counter()
+                history_gate.acquire()
+                gate_wait_ms = round((time.perf_counter() - gate_started) * 1000.0, 2)
+                _benchmark_metric(self, "history_attempts")
+                _benchmark_metric(self, "history_gate_wait_total_ms", gate_wait_ms)
+                _benchmark_metric(self, "history_gate_wait_peak_ms", gate_wait_ms, maximum=True)
+                if begin > 0:
+                    _benchmark_metric(self, "history_second_page_attempts")
+                try:
+                    if diagnostics is not None:
+                        diagnostics.event(
+                            "history_request_attempt",
+                            player_id=player_id,
+                            endpoint=endpoint,
+                            page={"begin": begin, "end": end},
+                            attempt=attempt + 1,
+                            history_gate_wait_ms=gate_wait_ms,
+                            request_activity=_LCU_REQUEST_TRACKER.snapshot(),
+                        )
                     payload = self._lcu.get_json_optional(endpoint, None)
+                finally:
+                    history_gate.release()
                 if isinstance(payload, dict):
+                    _benchmark_metric(self, "history_successes")
+                    if diagnostics is not None:
+                        diagnostics.event(
+                            "history_request_succeeded",
+                            player_id=player_id,
+                            endpoint=endpoint,
+                            page={"begin": begin, "end": end},
+                            attempt=attempt + 1,
+                            history_gate_wait_ms=gate_wait_ms,
+                        )
                     return payload
-                diagnostics = getattr(self, "_live_match_diagnostics", None)
+                if attempt == 0:
+                    _benchmark_metric(self, "history_retries")
+                else:
+                    _benchmark_metric(self, "history_failures")
                 if diagnostics is not None:
                     diagnostics.event(
                         "history_retry" if attempt == 0 else "history_failed",
-                        player_id=player_id, endpoint=endpoint, attempt=attempt + 1,
+                        player_id=player_id,
+                        endpoint=endpoint,
+                        page={"begin": begin, "end": end},
+                        attempt=attempt + 1,
+                        history_gate_wait_ms=gate_wait_ms,
+                        request_activity=_LCU_REQUEST_TRACKER.snapshot(),
                     )
                 if attempt == 0:
                     time.sleep(0.30)
@@ -930,6 +1001,74 @@ def install_live_match_speedups() -> None:
             return 0.5
         return 0.0
 
+    def schedule_history_failure_probe(
+        self: Any,
+        endpoint: str,
+        error: BaseException,
+        credentials: Any,
+        active_state: dict[str, int],
+    ) -> None:
+        global _LAST_FAILURE_PROBE_AT
+        diagnostics = active_diagnostics()
+        if not diagnostics or credentials is None:
+            return
+
+        now = time.monotonic()
+        with _FAILURE_PROBE_STATE_LOCK:
+            if now - _LAST_FAILURE_PROBE_AT < _FAILURE_PROBE_MIN_INTERVAL_SECONDS:
+                for trace in diagnostics:
+                    trace.event(
+                        "history_failure_probe_skipped",
+                        endpoint=endpoint,
+                        reason="A probe already ran during this failure wave",
+                        active_state=active_state,
+                    )
+                return
+            _LAST_FAILURE_PROBE_AT = now
+
+        if not _FAILURE_PROBE_LOCK.acquire(blocking=False):
+            for trace in diagnostics:
+                trace.event(
+                    "history_failure_probe_skipped",
+                    endpoint=endpoint,
+                    reason="Another failure probe is still running",
+                    active_state=active_state,
+                )
+            return
+
+        def worker() -> None:
+            try:
+                probe = diagnose_lcu_failure(
+                    port=int(credentials.port),
+                    password=str(credentials.password),
+                    protocol=str(credentials.protocol or "https"),
+                    context=getattr(self, "_league_highlights_ssl_context", None),
+                    original_error=error,
+                    active_state=active_state,
+                )
+                for trace in active_diagnostics():
+                    trace.event(
+                        "history_failure_root_cause_probe",
+                        endpoint=endpoint,
+                        lcu_port=int(credentials.port),
+                        probe=probe,
+                    )
+            except BaseException as probe_error:
+                for trace in active_diagnostics():
+                    trace.exception(
+                        "history_failure_probe_error",
+                        probe_error,
+                        endpoint=endpoint,
+                    )
+            finally:
+                _FAILURE_PROBE_LOCK.release()
+
+        threading.Thread(
+            target=worker,
+            name="LeagueHighlightsLCUFailureProbe",
+            daemon=True,
+        ).start()
+
     def faster_get_json(self: Any, endpoint: str) -> Any:
         endpoint = str(endpoint or "")
         ttl = shared_ttl(endpoint)
@@ -963,8 +1102,11 @@ def install_live_match_speedups() -> None:
                     raise ConnectionError(failed[1])
             # The owner did not publish a result; continue as a fallback owner.
 
+        request_context: dict[str, Any] = {}
+
         def perform_request() -> Any:
             credentials = self._get_credentials()
+            request_context["credentials"] = credentials
             if credentials is None:
                 raise ConnectionError("League Client lockfile was not found")
             token = base64.b64encode(
@@ -975,7 +1117,7 @@ def install_live_match_speedups() -> None:
                 headers={
                     "Accept": "application/json",
                     "Authorization": f"Basic {token}",
-                    "User-Agent": "LeagueHighlights/LCULeanV12",
+                    "User-Agent": "LeagueHighlights/LCULeanV13",
                     "Connection": "keep-alive",
                 },
             )
@@ -999,21 +1141,38 @@ def install_live_match_speedups() -> None:
                     f"League Client API endpoint is unavailable ({status or 'HTTP'})"
                 ) from exc
             except (TimeoutError, URLError, OSError) as exc:
-                raise ConnectionError("League Client API request timed out") from exc
+                # Preserve the original exception as __cause__. Diagnostics inspect
+                # the complete chain instead of flattening every failure to timeout.
+                raise ConnectionError("League Client API transport request failed") from exc
 
+        activity = _LCU_REQUEST_TRACKER.start(endpoint)
         try:
-            payload = record_lcu_request(endpoint, perform_request)
+            payload = record_lcu_request(
+                endpoint,
+                perform_request,
+                metadata=activity.as_dict(),
+            )
             if ttl > 0:
                 with _LCU_SHARED_LOCK:
                     _LCU_SHARED_CACHE[endpoint] = (time.monotonic(), payload)
                     _LCU_SHARED_FAILURES.pop(endpoint, None)
             return payload
         except ConnectionError as exc:
+            failure_state = _LCU_REQUEST_TRACKER.snapshot()
+            if "match-history" in endpoint.casefold():
+                schedule_history_failure_probe(
+                    self,
+                    endpoint,
+                    exc,
+                    request_context.get("credentials"),
+                    failure_state,
+                )
             if ttl > 0:
                 with _LCU_SHARED_LOCK:
                     _LCU_SHARED_FAILURES[endpoint] = (time.monotonic(), str(exc))
             raise
         finally:
+            _LCU_REQUEST_TRACKER.finish(activity)
             if ttl > 0:
                 with _LCU_SHARED_LOCK:
                     event = _LCU_SHARED_INFLIGHT.pop(endpoint, None)
@@ -1054,6 +1213,6 @@ def install_live_match_speedups() -> None:
     LiveMatchScout._speed_patch_installed = True
     LOGGER.info(
         "Live Match patch %s enabled: no persistent player cache, local-only, "
-        "5-game history, reliable ranked lookup, shared snapshots, single-flight LCU",
+        "5-game history, reliable ranked lookup, shared snapshots, single-flight LCU, root-cause probes",
         LIVE_MATCH_SPEED_BUILD,
     )

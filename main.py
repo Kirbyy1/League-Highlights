@@ -44,6 +44,7 @@ from app.ui.local_only_api_patch import (
     install_local_only_api_removal,
     prepare_local_only_config,
 )
+from app.ui.live_match_benchmark_patch import install_live_match_benchmark
 
 controller_module.FfmpegTools = ReliableFfmpegTools
 controller_module.VideoSegmentRecorder = ReliableVideoSegmentRecorder
@@ -58,6 +59,7 @@ install_reference_card_layout()
 install_rank_record_ui_guard()
 install_fake_match_debug()
 install_local_only_api_removal()
+install_live_match_benchmark()
 
 from app.controller_performance import PerformanceRecorderController
 
