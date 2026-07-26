@@ -19,7 +19,7 @@ from app.services.live_match_benchmark import (
 
 
 LOGGER = logging.getLogger(__name__)
-BENCHMARK_UI_BUILD = "V14-LIVE-MATCH-BENCHMARK-SETTINGS"
+BENCHMARK_UI_BUILD = "V15-PHASED-HISTORY-BENCHMARK-SETTINGS"
 
 
 class _BenchmarkBridge(QObject):

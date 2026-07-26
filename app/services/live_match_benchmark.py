@@ -10,7 +10,7 @@ from typing import Any, Callable
 from urllib.parse import quote
 
 
-BENCHMARK_BUILD = "V14-SAVED-ROSTER-BENCHMARK"
+BENCHMARK_BUILD = "V17-STREAMER-NAME-OPTION"
 ACTIVE_OR_SENSITIVE_PHASES = {"ChampSelect", "GameStart", "InProgress", "Reconnect"}
 _FIXTURE_VERSION = 1
 
@@ -169,6 +169,14 @@ def _clear_benchmark_caches(scout: Any) -> None:
     if hasattr(inflight, "clear"):
         inflight.clear()
     scout._lean_request_counts = {"rank": 0, "history": 0}
+    for name in ("_lean_rank_profile_keys", "_lean_history_profile_keys"):
+        value = getattr(scout, name, None)
+        if hasattr(value, "clear"):
+            value.clear()
+    scout._history_expected_profiles = 10
+    coordinator = getattr(scout, "_history_batch_coordinator", None)
+    if coordinator is not None and hasattr(coordinator, "reset"):
+        coordinator.reset(10)
 
 
 def _new_metrics() -> dict[str, Any]:
@@ -176,11 +184,36 @@ def _new_metrics() -> dict[str, Any]:
         "rank_endpoint_attempts": 0,
         "rank_endpoint_successes": 0,
         "rank_identity_fallbacks": 0,
+        # Legacy names are retained, but now have strict raw-attempt semantics:
+        # history_attempts == history_successes + history_failures.
         "history_attempts": 0,
         "history_successes": 0,
-        "history_retries": 0,
         "history_failures": 0,
+        "history_retries": 0,
+        # Explicit aliases/terminal counters remove ambiguity for result readers.
+        "history_raw_attempts": 0,
+        "history_raw_successes": 0,
+        "history_raw_failures": 0,
+        "history_retry_attempts": 0,
+        "history_terminal_page_failures": 0,
+        "history_first_page_terminal_failures": 0,
+        "history_second_page_terminal_failures": 0,
+        "history_first_page_attempts": 0,
+        "history_first_page_retries": 0,
         "history_second_page_attempts": 0,
+        "history_second_page_retries": 0,
+        "history_warmup_runs": 0,
+        "history_warmup_successes": 0,
+        "history_warmup_failures": 0,
+        "history_warmup_wait_total_ms": 0.0,
+        "history_warmup_wait_peak_ms": 0.0,
+        "history_first_phase_wait_total_ms": 0.0,
+        "history_first_phase_wait_peak_ms": 0.0,
+        "history_initial_round_wait_total_ms": 0.0,
+        "history_initial_round_wait_peak_ms": 0.0,
+        # Backward-compatible aliases for v15 result readers.
+        "history_page2_barrier_wait_total_ms": 0.0,
+        "history_page2_barrier_wait_peak_ms": 0.0,
         "history_gate_wait_total_ms": 0.0,
         "history_gate_wait_peak_ms": 0.0,
     }
@@ -277,7 +310,8 @@ def _run_profile_pass(
 
 def _phase(scout: Any) -> str:
     try:
-        return str(scout._lcu.gameflow_phase() or "")
+        value = scout._lcu.gameflow_phase()
+        return "" if value is None else str(value or "")
     except Exception:
         return ""
 
@@ -330,7 +364,14 @@ def run_full_benchmark(
             progress("Cold pass: loading ranks and five-game histories for 10 saved players")
         cold = _run_profile_pass(scout, players, platform, label="Cold pass", progress=progress)
 
-        cold_counts = dict(getattr(scout, "_lean_request_counts", {}) or {})
+        # These are unique completed player callbacks, not raw endpoint calls.
+        # The older counter only increased when a live history payload contained
+        # games, which produced misleading values such as 6 or 8 despite 10/10
+        # cards reaching ready.
+        cold_counts = {
+            "rank": int(cold.get("rank_callbacks", 0) or 0),
+            "history": int(cold.get("history_callbacks", 0) or 0),
+        }
         if progress is not None:
             progress("Warm pass: measuring the current-match memory cache")
         warm_started = time.perf_counter()
@@ -353,7 +394,20 @@ def run_full_benchmark(
             "cold": cold,
             "warm": warm,
             "pipeline_counts": cold_counts,
+            "pipeline_counts_note": (
+                "Unique player profiles completed during the cold pass; raw LCU calls are in request_metrics."
+            ),
             "request_metrics": dict(metrics),
+            "request_metrics_consistent": (
+                int(metrics.get("history_attempts", 0) or 0)
+                == int(metrics.get("history_successes", 0) or 0)
+                + int(metrics.get("history_failures", 0) or 0)
+            ),
+            "request_metrics_note": (
+                "history_attempts/successes/failures are raw LCU attempts and reconcile exactly; "
+                "history_retries counts retry attempts; history_terminal_page_failures counts pages "
+                "still unavailable after their retry. Legacy page2_barrier metrics are soft initial-round waits in v16."
+            ),
             "result_file": "",
             "limitations": [
                 "Measures rank/history/profile processing with saved identities.",
@@ -364,6 +418,13 @@ def run_full_benchmark(
         return result
     finally:
         _set_metrics_target(scout, None)
+        # Benchmark fixtures are historical by design; do not leave their player
+        # profiles in the live scout's current-match RAM caches.
+        _clear_benchmark_caches(scout)
+        scout._history_expected_profiles = 0
+        coordinator = getattr(scout, "_history_batch_coordinator", None)
+        if coordinator is not None and hasattr(coordinator, "reset"):
+            coordinator.reset(0)
         scout._live_match_benchmark_running = False
 
 
@@ -504,12 +565,17 @@ def format_result(result: dict[str, Any]) -> str:
         warm = dict(result.get("warm", {}) or {})
         metrics = dict(result.get("request_metrics", {}) or {})
         errors = len(dict(cold.get("errors", {}) or {}))
+        pipeline = dict(result.get("pipeline_counts", {}) or {})
         return (
             f"Full benchmark complete · cold {float(cold.get('total_complete_ms', 0) or 0):.2f} ms · "
             f"all ranks {cold.get('all_ranks_ms')} ms · all histories {cold.get('all_histories_ms')} ms · "
+            f"profiles {int(pipeline.get('history', 0) or 0)}/10 · "
             f"warm {float(warm.get('total_complete_ms', 0) or 0):.2f} ms · "
             f"history attempts {int(metrics.get('history_attempts', 0) or 0)} · "
-            f"retries {int(metrics.get('history_retries', 0) or 0)} · errors {errors}"
+            f"raw failures {int(metrics.get('history_failures', 0) or 0)} · "
+            f"retries {int(metrics.get('history_retries', 0) or 0)} · "
+            f"terminal page failures {int(metrics.get('history_terminal_page_failures', 0) or 0)} · "
+            f"player errors {errors}"
         )
     return (
         f"History stress test complete · {int(result.get('successes', 0) or 0)}/"

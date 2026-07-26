@@ -36,7 +36,7 @@ from app.services.live_match_performance_helpers import (
 
 
 LOGGER = logging.getLogger(__name__)
-LIVE_MATCH_SPEED_BUILD = "V14-BENCHMARK-METRICS"
+LIVE_MATCH_SPEED_BUILD = "V16-HISTORY-PRIORITY-QUEUE"
 
 # The recorder already requests these Live Client resources. Live Match reuses the
 # most recent snapshots instead of downloading the same JSON a second time.
@@ -70,6 +70,138 @@ def _benchmark_metric(scout: Any, key: str, value: float = 1.0, *, maximum: bool
     with lock:
         current = float(metrics.get(key, 0.0) or 0.0)
         metrics[key] = max(current, float(value)) if maximum else current + float(value)
+
+
+
+
+class _PriorityHistoryGate:
+    """A small fair gate that gives first-page work priority over retries/pages 2+."""
+
+    def __init__(self, slots: int = 2) -> None:
+        self._slots = max(1, int(slots))
+        self._condition = threading.Condition(threading.RLock())
+        self._active = 0
+        self._waiters: dict[int, int] = {}
+
+    def acquire(self, priority: int) -> float:
+        priority = max(0, int(priority))
+        started = time.perf_counter()
+        with self._condition:
+            self._waiters[priority] = self._waiters.get(priority, 0) + 1
+            try:
+                while (
+                    self._active >= self._slots
+                    or any(count > 0 for level, count in self._waiters.items() if level < priority)
+                ):
+                    self._condition.wait()
+                self._active += 1
+            finally:
+                remaining = self._waiters.get(priority, 1) - 1
+                if remaining > 0:
+                    self._waiters[priority] = remaining
+                else:
+                    self._waiters.pop(priority, None)
+        return round((time.perf_counter() - started) * 1000.0, 2)
+
+    def release(self) -> None:
+        with self._condition:
+            self._active = max(0, self._active - 1)
+            self._condition.notify_all()
+
+
+class _HistoryBatchCoordinator:
+    """Coordinates one ten-player history pass without mixing its request phases."""
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition(threading.RLock())
+        self.reset()
+
+    def reset(self, expected: int = 0) -> None:
+        with self._condition:
+            self.expected = max(0, int(expected))
+            self.registered: set[str] = set()
+            self.first_attempt_done: set[str] = set()
+            self.first_page_done: set[str] = set()
+            self.warmup_running = False
+            self.warmup_done = False
+            self.warmup_leader = ""
+            self.warmup_success = False
+            self.last_registration_at = time.monotonic()
+            self._condition.notify_all()
+
+    def configure(self, expected: int) -> None:
+        with self._condition:
+            self.expected = max(self.expected, max(1, int(expected)))
+
+    def register(self, player_key: str) -> None:
+        with self._condition:
+            self.registered.add(str(player_key or "").casefold())
+            self.last_registration_at = time.monotonic()
+            self._condition.notify_all()
+
+    def warmup_role(self, player_key: str, timeout: float = 4.25) -> tuple[bool, float]:
+        key = str(player_key or "").casefold()
+        started = time.perf_counter()
+        with self._condition:
+            self.registered.add(key)
+            self.last_registration_at = time.monotonic()
+            if self.warmup_done:
+                return False, 0.0
+            if not self.warmup_running:
+                self.warmup_running = True
+                self.warmup_leader = key
+                return True, 0.0
+            deadline = time.monotonic() + max(0.1, float(timeout))
+            while self.warmup_running and not self.warmup_done:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._condition.wait(remaining)
+            return False, round((time.perf_counter() - started) * 1000.0, 2)
+
+    def finish_warmup(self, success: bool) -> None:
+        with self._condition:
+            self.warmup_running = False
+            self.warmup_done = True
+            self.warmup_success = bool(success)
+            self._condition.notify_all()
+
+    def mark_first_attempt_done(self, player_key: str) -> None:
+        with self._condition:
+            self.first_attempt_done.add(str(player_key or "").casefold())
+            self._condition.notify_all()
+
+    def mark_first_page_done(self, player_key: str) -> None:
+        with self._condition:
+            self.first_page_done.add(str(player_key or "").casefold())
+            self._condition.notify_all()
+
+    def _wait_for(self, completed: set[str], timeout: float) -> float:
+        started = time.perf_counter()
+        with self._condition:
+            deadline = time.monotonic() + max(0.1, float(timeout))
+            while len(completed) < max(1, self.expected):
+                # Do not impose a long ten-player barrier when a revision skips
+                # history for a player. Once all registered callers are complete
+                # and registration has been quiet briefly, continue safely.
+                registration_quiet = time.monotonic() - self.last_registration_at >= 0.45
+                if (
+                    self.registered
+                    and len(completed) >= len(self.registered)
+                    and registration_quiet
+                ):
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._condition.wait(min(remaining, 0.20))
+        return round((time.perf_counter() - started) * 1000.0, 2)
+
+    def wait_for_first_attempts(self, timeout: float = 9.0) -> float:
+        return self._wait_for(self.first_attempt_done, timeout)
+
+    def wait_for_first_pages(self, timeout: float = 11.0) -> float:
+        return self._wait_for(self.first_page_done, timeout)
 
 
 def _snapshot_key(endpoint: str) -> str:
@@ -147,6 +279,15 @@ def _clear_current_match_state(scout: Any, *, keep_roster: bool = False) -> None
         inflight.clear()
 
     scout._last_completed_signature = ""
+    for name in ("_lean_rank_profile_keys", "_lean_history_profile_keys"):
+        value = getattr(scout, name, None)
+        if hasattr(value, "clear"):
+            value.clear()
+    scout._lean_request_counts = {"rank": 0, "history": 0}
+    coordinator = getattr(scout, "_history_batch_coordinator", None)
+    if coordinator is not None and hasattr(coordinator, "reset"):
+        coordinator.reset(0)
+    scout._history_expected_profiles = 0
     if not keep_roster:
         scout._last_roster_signature = ""
         scout._lean_frozen_roster = None
@@ -326,6 +467,11 @@ def install_live_match_speedups() -> None:
         self._lean_placeholder_key = ""
         self._lean_roster_logged_key = ""
         self._lean_request_counts = {"rank": 0, "history": 0}
+        self._lean_rank_profile_keys: set[str] = set()
+        self._lean_history_profile_keys: set[str] = set()
+        self._lean_profile_stage_lock = threading.RLock()
+        self._history_batch_coordinator = _HistoryBatchCoordinator()
+        self._history_expected_profiles = 0
         self._lean_last_load_seconds = 0.0
         self._live_match_benchmark_metrics = None
         self._live_match_benchmark_metrics_lock = threading.RLock()
@@ -494,6 +640,8 @@ def install_live_match_speedups() -> None:
         self._lean_match_key = match_key
         self._lean_frozen_roster = roster
         self._lean_snapshot_signature = _snapshot_roster_signature()
+        self._history_expected_profiles = max(1, min(10, len(list(roster.get("players", ()) or ()))))
+        self._history_batch_coordinator.configure(self._history_expected_profiles)
 
         diagnostics = getattr(self, "_live_match_diagnostics", None)
         if diagnostics is not None and match_key != self._lean_roster_logged_key:
@@ -527,7 +675,11 @@ def install_live_match_speedups() -> None:
             if diagnostics is not None:
                 diagnostics.event("manual_refresh_requested")
             _clear_current_match_state(self, keep_roster=True)
-            self._lean_request_counts = {"rank": 0, "history": 0}
+            self._history_expected_profiles = max(
+                1,
+                min(10, len(list((getattr(self, "_lean_frozen_roster", {}) or {}).get("players", ()) or ()))),
+            )
+            self._history_batch_coordinator.configure(self._history_expected_profiles)
         original_refresh(self, force=force)
 
     LiveMatchScout.refresh = lean_refresh
@@ -638,6 +790,17 @@ def install_live_match_speedups() -> None:
         ) -> None:
             if diagnostics is not None:
                 diagnostics.player_stage(callback_player_key, stage, payload)
+            normalized_stage = str(stage or "").casefold()
+            normalized_key = str(callback_player_key or "").casefold()
+            with self._lean_profile_stage_lock:
+                if normalized_stage == "rank":
+                    self._lean_rank_profile_keys.add(normalized_key)
+                if normalized_stage in {"fast", "ready"}:
+                    self._lean_history_profile_keys.add(normalized_key)
+                self._lean_request_counts = {
+                    "rank": len(self._lean_rank_profile_keys),
+                    "history": len(self._lean_history_profile_keys),
+                }
             if progress_callback is not None:
                 progress_callback(callback_player_key, stage, payload)
 
@@ -794,9 +957,6 @@ def install_live_match_speedups() -> None:
                         "raw_ranked_losses": raw_losses,
                     }
                     self._cache_store(self._lcu_rank_cache, cache_key, result)
-                    self._lean_request_counts["rank"] = int(
-                        self._lean_request_counts.get("rank", 0)
-                    ) + 1
                     result["_cache_state"] = "live"
                     return result
             return None
@@ -835,10 +995,13 @@ def install_live_match_speedups() -> None:
     LiveMatchScout._lcu_ranked_entry = reliable_ranked_entry
 
     # ------------------------------------------------------------------
-    # Adaptive five-game history: request 15 raw games first and fetch a second
-    # page only when mixed queues leave fewer than five Solo/Duo matches.
+    # Priority-queued five-game history pipeline. One real first-page request
+    # primes the LCU history service. A failed warm-up no longer blocks the other
+    # nine first pages: it joins the normal retry queue after the initial round.
+    # Second pages may start after every first attempt has run, while first-page
+    # retries still keep higher gate priority.
     # ------------------------------------------------------------------
-    history_gate = threading.BoundedSemaphore(2)
+    history_gate = _PriorityHistoryGate(2)
 
     @staticmethod
     def _history_games(payload: Any) -> list[dict[str, Any]]:
@@ -847,6 +1010,14 @@ def install_live_match_speedups() -> None:
         raw = payload.get("games", [])
         raw = raw.get("games", []) if isinstance(raw, dict) else raw
         return [game for game in raw if isinstance(game, dict)] if isinstance(raw, list) else []
+
+    def expected_history_profiles(self: Any) -> int:
+        explicit = int(getattr(self, "_history_expected_profiles", 0) or 0)
+        if explicit > 0:
+            return max(1, min(10, explicit))
+        roster = getattr(self, "_lean_frozen_roster", {}) or {}
+        players = list(roster.get("players", ()) or ()) if isinstance(roster, dict) else []
+        return max(1, min(10, len(players) or 10))
 
     def lean_recent_ranked_history(
         self: Any,
@@ -870,95 +1041,243 @@ def install_live_match_speedups() -> None:
                 "fresh_cache",
             )
 
+        coordinator = getattr(self, "_history_batch_coordinator", None)
+        if coordinator is None:
+            coordinator = _HistoryBatchCoordinator()
+            self._history_batch_coordinator = coordinator
+        coordinator.configure(expected_history_profiles(self))
+        coordinator.register(key)
         encoded = quote(str(player_id), safe="")
+        diagnostics = getattr(self, "_live_match_diagnostics", None)
 
-        def fetch_history_page(begin: int, end: int) -> Any:
+        def request_once(
+            begin: int,
+            end: int,
+            *,
+            attempt: int,
+            priority: int,
+            phase_name: str,
+        ) -> Any:
             endpoint = (
                 f"/lol-match-history/v1/products/lol/{encoded}/matches"
                 f"?begIndex={begin}&endIndex={end}"
             )
-            diagnostics = getattr(self, "_live_match_diagnostics", None)
-            for attempt in range(2):
-                gate_started = time.perf_counter()
-                history_gate.acquire()
-                gate_wait_ms = round((time.perf_counter() - gate_started) * 1000.0, 2)
-                _benchmark_metric(self, "history_attempts")
-                _benchmark_metric(self, "history_gate_wait_total_ms", gate_wait_ms)
-                _benchmark_metric(self, "history_gate_wait_peak_ms", gate_wait_ms, maximum=True)
-                if begin > 0:
-                    _benchmark_metric(self, "history_second_page_attempts")
-                try:
-                    if diagnostics is not None:
-                        diagnostics.event(
-                            "history_request_attempt",
-                            player_id=player_id,
-                            endpoint=endpoint,
-                            page={"begin": begin, "end": end},
-                            attempt=attempt + 1,
-                            history_gate_wait_ms=gate_wait_ms,
-                            request_activity=_LCU_REQUEST_TRACKER.snapshot(),
-                        )
-                    payload = self._lcu.get_json_optional(endpoint, None)
-                finally:
-                    history_gate.release()
-                if isinstance(payload, dict):
-                    _benchmark_metric(self, "history_successes")
-                    if diagnostics is not None:
-                        diagnostics.event(
-                            "history_request_succeeded",
-                            player_id=player_id,
-                            endpoint=endpoint,
-                            page={"begin": begin, "end": end},
-                            attempt=attempt + 1,
-                            history_gate_wait_ms=gate_wait_ms,
-                        )
-                    return payload
-                if attempt == 0:
-                    _benchmark_metric(self, "history_retries")
-                else:
-                    _benchmark_metric(self, "history_failures")
+            gate_wait_ms = history_gate.acquire(priority)
+            _benchmark_metric(self, "history_attempts")
+            _benchmark_metric(self, "history_raw_attempts")
+            _benchmark_metric(self, "history_gate_wait_total_ms", gate_wait_ms)
+            _benchmark_metric(self, "history_gate_wait_peak_ms", gate_wait_ms, maximum=True)
+            if begin == 0:
+                _benchmark_metric(self, "history_first_page_attempts")
+            else:
+                _benchmark_metric(self, "history_second_page_attempts")
+            try:
                 if diagnostics is not None:
                     diagnostics.event(
-                        "history_retry" if attempt == 0 else "history_failed",
+                        "history_request_attempt",
                         player_id=player_id,
                         endpoint=endpoint,
                         page={"begin": begin, "end": end},
-                        attempt=attempt + 1,
+                        attempt=attempt,
+                        pipeline_phase=phase_name,
+                        priority=priority,
                         history_gate_wait_ms=gate_wait_ms,
                         request_activity=_LCU_REQUEST_TRACKER.snapshot(),
                     )
-                if attempt == 0:
-                    time.sleep(0.30)
-            return None
+                payload = self._lcu.get_json_optional(endpoint, None)
+            finally:
+                history_gate.release()
+            if isinstance(payload, dict):
+                _benchmark_metric(self, "history_successes")
+                _benchmark_metric(self, "history_raw_successes")
+                if diagnostics is not None:
+                    diagnostics.event(
+                        "history_request_succeeded",
+                        player_id=player_id,
+                        endpoint=endpoint,
+                        page={"begin": begin, "end": end},
+                        attempt=attempt,
+                        pipeline_phase=phase_name,
+                        priority=priority,
+                        history_gate_wait_ms=gate_wait_ms,
+                    )
+            else:
+                # Raw transport accounting: every attempt must be either a JSON
+                # success or a failed/non-JSON attempt, so attempts == successes +
+                # failures in benchmark output.
+                _benchmark_metric(self, "history_failures")
+                _benchmark_metric(self, "history_raw_failures")
+            return payload
 
-        payload = fetch_history_page(0, 15)
-        games = _history_games(payload)
+        def retry_page(
+            begin: int,
+            end: int,
+            *,
+            first_payload: Any,
+            retry_priority: int,
+            phase_name: str,
+        ) -> Any:
+            if isinstance(first_payload, dict):
+                return first_payload
+            _benchmark_metric(self, "history_retries")
+            _benchmark_metric(self, "history_retry_attempts")
+            if begin == 0:
+                _benchmark_metric(self, "history_first_page_retries")
+            else:
+                _benchmark_metric(self, "history_second_page_retries")
+            if diagnostics is not None:
+                diagnostics.event(
+                    "history_retry",
+                    player_id=player_id,
+                    page={"begin": begin, "end": end},
+                    attempt=2,
+                    pipeline_phase=phase_name,
+                    request_activity=_LCU_REQUEST_TRACKER.snapshot(),
+                )
+            time.sleep(0.20)
+            payload = request_once(
+                begin,
+                end,
+                attempt=2,
+                priority=retry_priority,
+                phase_name=phase_name,
+            )
+            if not isinstance(payload, dict):
+                _benchmark_metric(self, "history_terminal_page_failures")
+                if begin == 0:
+                    _benchmark_metric(self, "history_first_page_terminal_failures")
+                else:
+                    _benchmark_metric(self, "history_second_page_terminal_failures")
+                if diagnostics is not None:
+                    diagnostics.event(
+                        "history_failed",
+                        player_id=player_id,
+                        page={"begin": begin, "end": end},
+                        attempt=2,
+                        pipeline_phase=phase_name,
+                        request_activity=_LCU_REQUEST_TRACKER.snapshot(),
+                    )
+            return payload
+
+        # The first caller becomes the warm-up leader. Its real first-page request
+        # primes the service, so no duplicate warm-up call is added. Crucially, a
+        # failed warm-up releases the other workers immediately after attempt one;
+        # the leader retries later with the other failed first pages instead of
+        # holding the entire ten-player batch behind a 1.5-second timeout/retry.
+        warmup_leader, warmup_wait_ms = coordinator.warmup_role(key)
+        if warmup_wait_ms:
+            _benchmark_metric(self, "history_warmup_wait_total_ms", warmup_wait_ms)
+            _benchmark_metric(self, "history_warmup_wait_peak_ms", warmup_wait_ms, maximum=True)
+
+        if warmup_leader:
+            _benchmark_metric(self, "history_warmup_runs")
+            first_payload: Any = None
+            try:
+                first_payload = request_once(
+                    0, 15, attempt=1, priority=0, phase_name="warmup_first_page"
+                )
+            finally:
+                coordinator.mark_first_attempt_done(key)
+                coordinator.finish_warmup(isinstance(first_payload, dict))
+
+            warmup_succeeded = isinstance(first_payload, dict)
+            _benchmark_metric(
+                self,
+                "history_warmup_successes" if warmup_succeeded else "history_warmup_failures",
+            )
+            if warmup_succeeded:
+                coordinator.mark_first_page_done(key)
+            else:
+                first_phase_wait_ms = coordinator.wait_for_first_attempts()
+                _benchmark_metric(self, "history_first_phase_wait_total_ms", first_phase_wait_ms)
+                _benchmark_metric(self, "history_first_phase_wait_peak_ms", first_phase_wait_ms, maximum=True)
+                try:
+                    first_payload = retry_page(
+                        0,
+                        15,
+                        first_payload=first_payload,
+                        retry_priority=1,
+                        phase_name="failed_warmup_first_page_retry",
+                    )
+                finally:
+                    coordinator.mark_first_page_done(key)
+        else:
+            first_payload = None
+            try:
+                first_payload = request_once(
+                    0, 15, attempt=1, priority=0, phase_name="all_first_pages"
+                )
+            finally:
+                coordinator.mark_first_attempt_done(key)
+
+            if isinstance(first_payload, dict):
+                # A successful player can render immediately; only failed first
+                # pages wait for the rest of phase 1 before retrying.
+                coordinator.mark_first_page_done(key)
+            else:
+                first_phase_wait_ms = coordinator.wait_for_first_attempts()
+                _benchmark_metric(self, "history_first_phase_wait_total_ms", first_phase_wait_ms)
+                _benchmark_metric(self, "history_first_phase_wait_peak_ms", first_phase_wait_ms, maximum=True)
+                try:
+                    first_payload = retry_page(
+                        0,
+                        15,
+                        first_payload=first_payload,
+                        retry_priority=1,
+                        phase_name="failed_first_page_retries",
+                    )
+                finally:
+                    coordinator.mark_first_page_done(key)
+
+        games = _history_games(first_payload)
 
         def convert(raw_games: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
-                samples: list[dict[str, Any]] = []
-                match_ids: list[str] = []
-                seen_ids: set[str] = set()
-                for game in raw_games:
-                    if int(game.get("queueId", 0) or 0) != 420:
-                        continue
-                    sample = self._lcu_game_to_sample(game, player_id)
-                    if sample is None:
-                        continue
-                    match_id = str(game.get("gameId", "") or sample.get("match_id", ""))
-                    if match_id and match_id in seen_ids:
-                        continue
-                    if match_id:
-                        seen_ids.add(match_id)
-                        match_ids.append(match_id)
-                    samples.append(sample)
-                    if len(samples) >= wanted:
-                        break
-                return samples, match_ids
+            samples: list[dict[str, Any]] = []
+            match_ids: list[str] = []
+            seen_ids: set[str] = set()
+            for game in raw_games:
+                if int(game.get("queueId", 0) or 0) != 420:
+                    continue
+                sample = self._lcu_game_to_sample(game, player_id)
+                if sample is None:
+                    continue
+                match_id = str(game.get("gameId", "") or sample.get("match_id", ""))
+                if match_id and match_id in seen_ids:
+                    continue
+                if match_id:
+                    seen_ids.add(match_id)
+                    match_ids.append(match_id)
+                samples.append(sample)
+                if len(samples) >= wanted:
+                    break
+            return samples, match_ids
 
         samples, match_ids = convert(games)
+
         if len(samples) < wanted and len(games) >= 15:
-            second = fetch_history_page(15, 35)
-            second_games = _history_games(second)
+            # Only players that actually need page 2 wait here. The soft barrier
+            # waits only for every player's initial first-page attempt, not for all
+            # retries to finish. First-page retries still beat page 2 at the gate
+            # because priority 1 is higher than priority 2. This removes the long
+            # tail seen when one failed first page held six page-2 players back.
+            initial_round_wait_ms = coordinator.wait_for_first_attempts()
+            _benchmark_metric(self, "history_initial_round_wait_total_ms", initial_round_wait_ms)
+            _benchmark_metric(self, "history_initial_round_wait_peak_ms", initial_round_wait_ms, maximum=True)
+            # Keep legacy metric names for old result readers; they now represent
+            # the soft initial-round wait rather than a full first-page barrier.
+            _benchmark_metric(self, "history_page2_barrier_wait_total_ms", initial_round_wait_ms)
+            _benchmark_metric(self, "history_page2_barrier_wait_peak_ms", initial_round_wait_ms, maximum=True)
+            second_payload = request_once(
+                15, 35, attempt=1, priority=2, phase_name="second_pages_after_initial_round"
+            )
+            second_payload = retry_page(
+                15,
+                35,
+                first_payload=second_payload,
+                retry_priority=3,
+                phase_name="failed_second_page_retries",
+            )
+            second_games = _history_games(second_payload)
             samples, match_ids = convert(games + second_games)
 
         if not games:
@@ -972,9 +1291,6 @@ def install_live_match_speedups() -> None:
 
         payload_cache = {"samples": samples, "match_ids": match_ids}
         self._cache_store(self._lcu_history_cache, key, payload_cache)
-        self._lean_request_counts["history"] = int(
-            self._lean_request_counts.get("history", 0)
-        ) + 1
         return samples, match_ids, "live"
 
     LiveMatchScout._lcu_recent_ranked_history = lean_recent_ranked_history
@@ -1213,6 +1529,6 @@ def install_live_match_speedups() -> None:
     LiveMatchScout._speed_patch_installed = True
     LOGGER.info(
         "Live Match patch %s enabled: no persistent player cache, local-only, "
-        "5-game history, reliable ranked lookup, shared snapshots, single-flight LCU, root-cause probes",
+        "phased 5-game history, warm-up, first-page priority, reliable ranked lookup, root-cause probes",
         LIVE_MATCH_SPEED_BUILD,
     )
