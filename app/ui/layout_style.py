@@ -907,4 +907,50 @@ QTableView {
     border-radius: 3px;
 }
 
+/* Live Match V30 - professional compact scouting surface */
+QFrame#LiveStackedTeam {
+    background: #0D141B;
+    border: 1px solid #22303B;
+    border-radius: 5px;
+}
+
+QLabel#LiveStackedTeamHeading {
+    color: #B4C0CA;
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: 0px;
+}
+
+QLabel#LiveStackedTeamSummary {
+    color: #7F8D99;
+    font-size: 9px;
+    font-weight: 620;
+}
+
+QLabel#LiveStackedEmpty {
+    min-height: 160px;
+    color: #84919D;
+    padding: 12px;
+}
+
+QFrame#LiveMatchStatusBar {
+    min-height: 28px;
+    max-height: 30px;
+    background: #0E151C;
+    border: 1px solid #24313B;
+    border-radius: 4px;
+}
+
+QLabel#LiveMatchStatusText {
+    color: #C9D2DB;
+    font-size: 11px;
+    font-weight: 620;
+}
+
+QFrame#LiveApiBanner {
+    background: #111922;
+    border: 1px solid #263642;
+    border-radius: 4px;
+}
+
 """

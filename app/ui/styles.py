@@ -1509,3 +1509,72 @@ QLabel#WhatsNewFooter {
 }
 '''
 
+# v45 champion-select recommendations on the Live Match page
+APP_STYLE += r'''
+QFrame#ChampionSelectPanel {
+    background: #0F171E;
+    border: 1px solid #25333E;
+    border-radius: 5px;
+}
+QLabel#ChampionSelectTitle {
+    color: #EAF0F5;
+    font-size: 13px;
+    font-weight: 720;
+}
+QLabel#ChampionSelectSummary {
+    color: #B6C1CB;
+    font-size: 11px;
+    font-weight: 620;
+}
+QLabel#ChampionSelectTeams {
+    color: #8F9BA7;
+    font-size: 11px;
+}
+QFrame#ChampionRecommendation {
+    background: #0C131A;
+    border: 1px solid #263642;
+    border-radius: 4px;
+}
+QLabel#ChampionRecommendationName {
+    color: #F1F6FA;
+    font-size: 12px;
+    font-weight: 700;
+}
+QLabel#ChampionRecommendationScore {
+    min-width: 30px;
+    max-width: 36px;
+    color: #A7C9E8;
+    background: #14212C;
+    border: 1px solid #2B4A60;
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-size: 11px;
+    font-weight: 750;
+}
+QLabel#ChampionRecommendationScore[tier="medium"] {
+    color: #F1BD70;
+    background: #281F13;
+    border-color: #6C4B20;
+}
+QLabel#ChampionRecommendationScore[tier="high"] {
+    color: #58D889;
+    background: #10251A;
+    border-color: #2B5E3D;
+}
+QLabel#ChampionRecommendationMeta {
+    color: #81909D;
+    font-size: 10px;
+    font-weight: 620;
+}
+QLabel#ChampionRecommendationDetail {
+    color: #A6B3BE;
+    font-size: 11px;
+}
+QLabel#ChampionSelectEmpty {
+    color: #93A0AC;
+    background: #0C131A;
+    border: 1px solid #25333E;
+    border-radius: 4px;
+    padding: 10px;
+}
+'''

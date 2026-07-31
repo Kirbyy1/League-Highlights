@@ -99,36 +99,36 @@ class ReferencePlayerScoutCard(QFrame):
         self._committed_tag_signature: tuple[tuple[str, str], ...] = ()
         self._tag_commit_allowed = True
 
-        self._placeholder_champion = QPixmap(52, 52)
+        self._placeholder_champion = QPixmap(48, 48)
         self._placeholder_champion.fill(QColor("#202B37"))
         self._placeholder_icon = QPixmap(28, 28)
         self._placeholder_icon.fill(Qt.GlobalColor.transparent)
 
         self.setObjectName("ReferencePlayerScoutCard")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setMinimumHeight(330)
+        self.setMinimumHeight(304)
         self.setStyleSheet(
             """
             QFrame#ReferencePlayerScoutCard {
-                background: #10171E;
-                border: 1px solid #22303B;
-                border-radius: 7px;
+                background: #101820;
+                border: 1px solid #25333E;
+                border-radius: 5px;
             }
             QFrame#ReferencePlayerScoutCard:hover {
-                background: #141D25;
-                border-color: #3A4A58;
+                background: #121B23;
+                border-color: #40505E;
             }
             QFrame#ReferenceCardHeader {
-                background: #0F151C;
+                background: #0D141B;
                 border: none;
-                border-top-left-radius: 7px;
-                border-top-right-radius: 7px;
+                border-top-left-radius: 5px;
+                border-top-right-radius: 5px;
             }
             QFrame#ReferenceCardBody {
-                background: #10171E;
+                background: #101820;
                 border: none;
-                border-bottom-left-radius: 7px;
-                border-bottom-right-radius: 7px;
+                border-bottom-left-radius: 5px;
+                border-bottom-right-radius: 5px;
             }
             """
         )
@@ -140,16 +140,26 @@ class ReferencePlayerScoutCard(QFrame):
         self.header = QFrame()
         self.header.setObjectName("ReferenceCardHeader")
         header_layout = QHBoxLayout(self.header)
-        header_layout.setContentsMargins(10, 6, 10, 6)
-        header_layout.setSpacing(8)
+        header_layout.setContentsMargins(9, 5, 9, 5)
+        header_layout.setSpacing(6)
 
         self.name_label = QLabel(self.player_name)
         self.name_label.setStyleSheet("color: #F0F3F6; font-weight: 700; font-size: 11px;")
+        self.name_label.setToolTip(self.player_name)
         header_layout.addWidget(self.name_label, 1)
+
+        self.stage_chip = QLabel("Loading")
+        self.stage_chip.setObjectName("ReferenceStageChip")
+        self.stage_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header_layout.addWidget(self.stage_chip, 0, Qt.AlignmentFlag.AlignRight)
 
         self.party_label = QLabel("")
         self.party_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.party_label.setStyleSheet("color: #71808E; font-size: 10px; font-weight: 600;")
+        self.party_label.setStyleSheet(
+            "color: #A7C9E8; background: #14212C; border: none; "
+            "border-radius: 3px; padding: 2px 6px; font-size: 9px; font-weight: 650;"
+        )
+        self.party_label.setVisible(False)
         header_layout.addWidget(self.party_label)
 
         root.addWidget(self.header)
@@ -157,24 +167,31 @@ class ReferencePlayerScoutCard(QFrame):
         self.body = QFrame()
         self.body.setObjectName("ReferenceCardBody")
         body = QVBoxLayout(self.body)
-        body.setContentsMargins(9, 9, 9, 9)
-        body.setSpacing(8)
+        body.setContentsMargins(8, 8, 8, 8)
+        body.setSpacing(7)
         root.addWidget(self.body)
 
         top = QHBoxLayout()
-        top.setSpacing(10)
+        top.setSpacing(9)
         self.champion_label = QLabel()
-        self.champion_label.setFixedSize(52, 52)
+        self.champion_label.setFixedSize(48, 48)
         self.champion_label.setPixmap(self._placeholder_champion)
         self.champion_label.setScaledContents(True)
-        self.champion_label.setStyleSheet("border: none; background: #142019; border-radius: 5px;")
+        self.champion_label.setStyleSheet(
+            "border: 1px solid #2B3D4A; background: #111922; border-radius: 4px;"
+        )
         top.addWidget(self.champion_label, 0, Qt.AlignmentFlag.AlignTop)
 
         summary_col = QVBoxLayout()
-        summary_col.setSpacing(3)
+        summary_col.setSpacing(2)
+
+        self.champion_title = QLabel(self.champion_name)
+        self.champion_title.setToolTip(self.champion_name)
+        self.champion_title.setStyleSheet("color: #F1F6FA; font-size: 11px; font-weight: 700;")
+        summary_col.addWidget(self.champion_title)
 
         self.quick_win_label = QLabel("0 Played")
-        self.quick_win_label.setStyleSheet("color: #E7EDF3; font-size: 11px; font-weight: 700;")
+        self.quick_win_label.setStyleSheet("color: #D8E1E8; font-size: 10px; font-weight: 650;")
         summary_col.addWidget(self.quick_win_label)
 
         self.kda_label = QLabel("— / — / —")
@@ -197,10 +214,10 @@ class ReferencePlayerScoutCard(QFrame):
         self.rank_section = QFrame()
         rank_layout = QHBoxLayout(self.rank_section)
         rank_layout.setContentsMargins(0, 0, 0, 0)
-        rank_layout.setSpacing(10)
+        rank_layout.setSpacing(8)
 
         self.rank_icon_label = QLabel()
-        self.rank_icon_label.setFixedSize(30, 30)
+        self.rank_icon_label.setFixedSize(28, 28)
         self.rank_icon_label.setPixmap(self._placeholder_icon)
         self.rank_icon_label.setScaledContents(True)
         rank_layout.addWidget(self.rank_icon_label, 0, Qt.AlignmentFlag.AlignTop)
@@ -219,10 +236,10 @@ class ReferencePlayerScoutCard(QFrame):
         self.role_section = QFrame()
         role_layout = QHBoxLayout(self.role_section)
         role_layout.setContentsMargins(0, 0, 0, 0)
-        role_layout.setSpacing(10)
+        role_layout.setSpacing(8)
 
         self.role_icon_label = QLabel()
-        self.role_icon_label.setFixedSize(30, 30)
+        self.role_icon_label.setFixedSize(28, 28)
         self.role_icon_label.setPixmap(self._placeholder_icon)
         self.role_icon_label.setScaledContents(True)
         role_layout.addWidget(self.role_icon_label, 0, Qt.AlignmentFlag.AlignTop)
@@ -257,6 +274,7 @@ class ReferencePlayerScoutCard(QFrame):
 
         self._set_stat_box(self.left_stat, "Recent", "0", "0 wins")
         self._set_stat_box(self.right_stat, "Ranked", "0", "0 wins")
+        self._set_stage("Loading", "loading")
         self._pending_tags = []
         self._committed_tag_signature = ()
         self._tag_commit_allowed = True
@@ -265,9 +283,11 @@ class ReferencePlayerScoutCard(QFrame):
 
     def _make_stat_box(self) -> dict[str, Any]:
         frame = QFrame()
-        frame.setStyleSheet("background: #0F151C; border: none; border-radius: 5px;")
+        frame.setStyleSheet(
+            "background: #0D141B; border: 1px solid #22303B; border-radius: 4px;"
+        )
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setContentsMargins(7, 5, 7, 5)
         layout.setSpacing(2)
 
         top = QHBoxLayout()
@@ -275,7 +295,7 @@ class ReferencePlayerScoutCard(QFrame):
         top.setSpacing(3)
 
         big = QLabel("0")
-        big.setStyleSheet("color: #A7C9E8; font-size: 21px; font-weight: 500;")
+        big.setStyleSheet("color: #A7C9E8; font-size: 19px; font-weight: 600;")
         top.addWidget(big, 0, Qt.AlignmentFlag.AlignBottom)
 
         suffix = QLabel("")
@@ -306,11 +326,26 @@ class ReferencePlayerScoutCard(QFrame):
         box["detail"].setText(detail)
         box["suffix"].setText(suffix)
 
+    def _set_stage(self, text: str, state: str) -> None:
+        colors = {
+            "loading": ("#14212C", "#A7C9E8"),
+            "partial": ("#281F13", "#F1BD70"),
+            "fast": ("#13231A", "#7BE2A0"),
+            "ready": ("#10251A", "#58D889"),
+            "unavailable": ("#26171B", "#F18B92"),
+        }
+        background, foreground = colors.get(state, colors["loading"])
+        self.stage_chip.setText(text)
+        self.stage_chip.setStyleSheet(
+            f"color: {foreground}; background: {background}; border: none; "
+            "border-radius: 3px; padding: 2px 6px; font-size: 9px; font-weight: 700;"
+        )
+
     def set_champion_icon(self, pixmap: QPixmap) -> None:
         if isinstance(pixmap, QPixmap) and not pixmap.isNull():
             self.champion_label.setPixmap(
                 pixmap.scaled(
-                    QSize(52, 52),
+                    QSize(48, 48),
                     Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     Qt.TransformationMode.SmoothTransformation,
                 )
@@ -320,7 +355,7 @@ class ReferencePlayerScoutCard(QFrame):
         if isinstance(pixmap, QPixmap) and not pixmap.isNull():
             self.rank_icon_label.setPixmap(
                 pixmap.scaled(
-                    QSize(30, 30),
+                    QSize(28, 28),
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
@@ -330,7 +365,7 @@ class ReferencePlayerScoutCard(QFrame):
         if isinstance(pixmap, QPixmap) and not pixmap.isNull():
             self.role_icon_label.setPixmap(
                 pixmap.scaled(
-                    QSize(30, 30),
+                    QSize(28, 28),
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
@@ -339,6 +374,7 @@ class ReferencePlayerScoutCard(QFrame):
     def set_waiting_for_key(self) -> None:
         self.rank_label.setText("Local scouting unavailable")
         self.rank_subtitle.setText("Riot API fallback is not configured")
+        self._set_stage("No data", "unavailable")
         self.level_chip.setText("Lv —")
         self.quick_win_label.setText("0 Played")
         self.kda_label.setText("— / — / —")
@@ -440,7 +476,7 @@ class ReferencePlayerScoutCard(QFrame):
     def _stable_tag_list(
         tags: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Return up to four deterministic, unique tags."""
+        """Return a deterministic, unique tag list suitable for compact cards."""
 
         unique: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -460,7 +496,7 @@ class ReferencePlayerScoutCard(QFrame):
             item = dict(raw)
             item["text"] = text
             unique.append(item)
-            if len(unique) >= 4:
+            if len(unique) >= 8:
                 break
 
         return unique
@@ -503,17 +539,20 @@ class ReferencePlayerScoutCard(QFrame):
             dict(stats or {}),
         )
         stats = self.latest_stats
+        state = str(stats.get("state", "") or "")
 
         riot_id = _normalize_text(stats.get("riot_id", "") or stats.get("game_name", "") or self.player_name)
         if riot_id:
             self.player_name = riot_id
             self.name_label.setText(riot_id)
+            self.name_label.setToolTip(riot_id)
 
         account_level = stats.get("account_level")
         self.level_chip.setText(f"Lv {int(account_level)}" if account_level not in {None, ""} else "Lv —")
 
         premade_size = int(stats.get("premade_size", 0) or 0)
         self.party_label.setText(f"Party {premade_size}" if premade_size > 1 else "")
+        self.party_label.setVisible(premade_size > 1)
 
         sample_games = int(stats.get("sample_games", 0) or 0)
         recent_wr = stats.get("recent_win_rate")
@@ -551,6 +590,17 @@ class ReferencePlayerScoutCard(QFrame):
         else:
             self.rank_label.setText("Loading rank…")
             self.rank_tier = "LOADING"
+
+        if state == "ready":
+            self._set_stage("Ready", "ready")
+        elif state == "fast":
+            self._set_stage("Quick", "fast")
+        elif state == "partial":
+            self._set_stage("Rank", "partial")
+        elif state in {"error", "unavailable"} or rank_state == "unavailable":
+            self._set_stage("No data", "unavailable")
+        else:
+            self._set_stage("Loading", "loading")
 
         ranked_games = int(
             stats.get("ranked_games", stats.get("games", 0)) or 0
@@ -616,7 +666,10 @@ class ReferencePlayerScoutCard(QFrame):
             if widget is not None:
                 widget.deleteLater()
 
-        for index, tag in enumerate(tags):
+        visible_tags = tags[:3]
+        hidden_tags = tags[3:]
+
+        for index, tag in enumerate(visible_tags):
             text = _normalize_text(tag.get("text", "") or tag.get("label", "") or "")
             if not text:
                 continue
@@ -625,9 +678,27 @@ class ReferencePlayerScoutCard(QFrame):
             chip.setWordWrap(False)
             chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
             chip.setStyleSheet(
-                f"background: {bg}; color: {fg}; border: none; border-radius: 3px; padding: 4px 8px; font-size: 10px; font-weight: 600;"
+                f"background: {bg}; color: {fg}; border: 1px solid {border}; "
+                "border-radius: 3px; padding: 3px 7px; font-size: 9px; font-weight: 650;"
             )
             self.tags_grid.addWidget(chip, index // 2, index % 2)
+
+        if hidden_tags:
+            more = QLabel(f"+{len(hidden_tags)}")
+            more.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            more.setToolTip(
+                "\n".join(
+                    _normalize_text(tag.get("text", "") or tag.get("label", "") or "")
+                    for tag in hidden_tags
+                    if _normalize_text(tag.get("text", "") or tag.get("label", "") or "")
+                )
+            )
+            more.setStyleSheet(
+                "background: #17212A; color: #AAB5C0; border: 1px solid #2D3944; "
+                "border-radius: 3px; padding: 3px 7px; font-size: 9px; font-weight: 650;"
+            )
+            index = len(visible_tags)
+            self.tags_grid.addWidget(more, index // 2, index % 2)
 
     def _update_tooltip(self) -> None:
         stats = dict(self.latest_stats or {})

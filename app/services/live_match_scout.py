@@ -44,6 +44,7 @@ from app.services.live_match_intelligence import (
     PlayerProfileDiskCache,
     normalize_name,
 )
+from app.services.champion_select_recommendations import build_champion_select_advice
 
 
 _LOCAL_BASE = "https://127.0.0.1:2999/liveclientdata"
@@ -103,6 +104,7 @@ class LiveMatchScout(QObject):
     """Detect the live roster and calculate compact scouting profiles."""
 
     roster_changed = Signal(object)
+    champion_select_changed = Signal(object)
     player_stats_changed = Signal(str, object)
     status_changed = Signal(str, str)
     poll_interval_changed = Signal(int)
@@ -132,6 +134,7 @@ class LiveMatchScout(QObject):
         self._generation = 0
         self._last_roster_signature = ""
         self._last_completed_signature = ""
+        self._last_champ_select_signature = ""
         self._pending_encounter_game: dict[str, Any] | None = None
         self._player_cache: dict[tuple[str, str, str], _CacheEntry] = {}
         self._lcu_rank_cache: dict[str, _CacheEntry] = {}
@@ -190,6 +193,7 @@ class LiveMatchScout(QObject):
         self._mastery_cache.clear()
         self._last_roster_signature = ""
         self._last_completed_signature = ""
+        self._last_champ_select_signature = ""
         self._pending_encounter_game = None
         self._spectator_roster_cache = {}
         self._spectator_roster_cached_at = 0.0
@@ -209,6 +213,30 @@ class LiveMatchScout(QObject):
             name="LeagueHighlightsLiveMatch",
             daemon=True,
         ).start()
+
+    def _emit_champion_select_advice(self, force: bool = False) -> None:
+        try:
+            advice = build_champion_select_advice(
+                self._lcu.champ_select_session(),
+                self._champion_catalog.champion_name,
+            )
+        except Exception:
+            logging.debug("Champion select recommendations unavailable", exc_info=True)
+            advice = {}
+
+        signature = (
+            json.dumps(advice, sort_keys=True, separators=(",", ":"))
+            if advice
+            else ""
+        )
+        if force or signature != self._last_champ_select_signature:
+            self._last_champ_select_signature = signature
+            self.champion_select_changed.emit(advice)
+
+    def _clear_champion_select_advice(self) -> None:
+        if self._last_champ_select_signature:
+            self._last_champ_select_signature = ""
+            self.champion_select_changed.emit({})
 
     def _run_cycle(self, generation: int, force: bool) -> None:
         try:
@@ -231,6 +259,10 @@ class LiveMatchScout(QObject):
                 if not loading_phase:
                     self._flush_pending_encounters()
                     self._last_completed_signature = ""
+                if phase == "ChampSelect":
+                    self._emit_champion_select_advice(force=force)
+                else:
+                    self._clear_champion_select_advice()
                 if not loading_phase or not self._last_roster_signature:
                     self._last_roster_signature = ""
                     self.roster_changed.emit(roster)
@@ -252,6 +284,7 @@ class LiveMatchScout(QObject):
                     self.status_changed.emit("waiting", "Waiting for a League match")
                 return
 
+            self._clear_champion_select_advice()
             self.poll_interval_changed.emit(self.READY_POLL_INTERVAL_MS)
 
             signature = self._stable_roster_signature(roster)
@@ -297,6 +330,27 @@ class LiveMatchScout(QObject):
                         f"30-game {len(progress['ready'])}/{total}"
                     )
 
+            last_progress_emit_at = 0.0
+            last_progress_text = ""
+            progress_emit_lock = threading.RLock()
+
+            def emit_progress(*, force: bool = False) -> None:
+                nonlocal last_progress_emit_at, last_progress_text
+                message = progress_message()
+                now_progress = time.monotonic()
+                with progress_emit_lock:
+                    if (
+                        not force
+                        and (
+                            message == last_progress_text
+                            or now_progress - last_progress_emit_at < 0.15
+                        )
+                    ):
+                        return
+                    last_progress_emit_at = now_progress
+                    last_progress_text = message
+                self.status_changed.emit("loading", message)
+
             def report_progress(
                 player_key: str,
                 stage: str,
@@ -311,9 +365,9 @@ class LiveMatchScout(QObject):
                         progress["name"].add(player_key)
                     if stage in progress:
                         progress[stage].add(player_key)
-                self.status_changed.emit("loading", progress_message())
+                emit_progress()
 
-            self.status_changed.emit("loading", progress_message())
+            emit_progress(force=True)
 
             with ThreadPoolExecutor(
                 max_workers=max(1, min(self.MAX_CONCURRENT_PLAYERS, total)),

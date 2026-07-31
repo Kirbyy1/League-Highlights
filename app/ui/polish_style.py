@@ -610,4 +610,53 @@ QProgressBar::chunk {
     background: #5BD98A;
     border-radius: 2px;
 }
+
+/* ---------- Stats page ---------- */
+
+QFrame#ProStatsCard {
+    background: #0F151C;
+    border: 1px solid #22303B;
+    border-radius: 5px;
+}
+
+QFrame#ProStatsCard:hover {
+    background: #111A22;
+    border-color: #344350;
+}
+
+QLabel#ProStatsValue {
+    color: #F1F6FA;
+    font-size: 24px;
+    font-weight: 720;
+}
+
+QLabel#ProStatsLabel {
+    color: #8996A3;
+    font-size: 11px;
+    font-weight: 650;
+}
+
+QFrame#StatsDetailPanel {
+    background: #0F151C;
+    border: 1px solid #22303B;
+    border-radius: 5px;
+}
+
+QLabel#StatsDetailTitle {
+    color: #E9EEF3;
+    font-size: 13px;
+    font-weight: 720;
+}
+
+QLabel#StatsDetailLabel {
+    color: #82909D;
+    font-size: 11px;
+    font-weight: 620;
+}
+
+QLabel#StatsDetailValue {
+    color: #D7E0E8;
+    font-size: 11px;
+    font-weight: 650;
+}
 """

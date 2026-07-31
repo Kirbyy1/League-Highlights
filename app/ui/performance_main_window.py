@@ -47,6 +47,8 @@ class PerformanceMainWindow(EnhancedMainWindow):
         if hasattr(self, "storage_summary"):
             clip_word = "clip" if len(clips) == 1 else "clips"
             self.storage_summary.setText(f"{len(clips)} {clip_word}")
+        if hasattr(self, "stats_values"):
+            self._refresh_stats_page()
 
         self._clear_layout(self.games_layout)
         self._pending_games = deque(games)

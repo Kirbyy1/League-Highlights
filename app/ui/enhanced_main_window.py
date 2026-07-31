@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -19,7 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.models import RecorderState
+from app.models import RecorderState, format_file_size
 from app.services.riot_api_validator import RiotApiValidationResult, validate_riot_api_key
 from app.services.recording_policy import (
     RECORDING_SCOPE_ALL,
@@ -64,6 +65,47 @@ def _live_match_icon(color: str = "#D7DFE8") -> QIcon:
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor(color))
     painter.drawEllipse(QRectF(9.0, 9.0, 2.0, 2.0))
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _draft_icon(color: str = "#D7DFE8") -> QIcon:
+    """Champion-select draft symbol."""
+
+    pixmap = QPixmap(20, 20)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    pen = QPen(QColor(color), 1.45)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    painter.drawRoundedRect(QRectF(4.0, 4.0, 12.0, 12.0), 2.6, 2.6)
+    painter.drawLine(7.0, 8.0, 13.0, 8.0)
+    painter.drawLine(7.0, 11.0, 11.0, 11.0)
+    painter.setBrush(QColor(color))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawEllipse(QRectF(6.0, 6.0, 2.1, 2.1))
+    painter.drawEllipse(QRectF(6.0, 9.0, 2.1, 2.1))
+    painter.drawEllipse(QRectF(12.4, 12.4, 3.2, 3.2))
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _stats_icon(color: str = "#D7DFE8") -> QIcon:
+    """Small analytics symbol."""
+
+    pixmap = QPixmap(20, 20)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(color))
+    painter.drawRoundedRect(QRectF(4.5, 11.0, 2.6, 5.0), 1.1, 1.1)
+    painter.drawRoundedRect(QRectF(8.7, 7.0, 2.6, 9.0), 1.1, 1.1)
+    painter.drawRoundedRect(QRectF(12.9, 4.0, 2.6, 12.0), 1.1, 1.1)
     painter.end()
     return QIcon(pixmap)
 
@@ -186,15 +228,18 @@ class EnhancedMainWindow(MainWindow):
         self._riot_api_validation_state = "idle"
         self._riot_api_validation_message = ""
         self._pending_riot_api_settings: tuple[str, bool, str] | None = None
+        self._active_live_mode = "live"
         self.recording_policy = install_recording_policy(controller, config)
         super().__init__(config, controller, update_manager)
         self.riot_api_validation_finished.connect(self._on_riot_api_validation_finished)
         self.sidebar.setFixedWidth(58)
         self.highlights_nav.setText("")
-        self.highlights_nav.setToolTip("Highlights")
+        self.highlights_nav.setToolTip("Library")
         self.highlights_nav.setProperty("compact", True)
 
         self._install_live_match_page()
+        self._install_stats_page()
+        self._install_settings_nav()
         self._add_recording_policy_settings()
         self._add_riot_api_settings()
         self._enhance_highlights_page()
@@ -224,6 +269,7 @@ class EnhancedMainWindow(MainWindow):
         self._decorate_game_cards()
         self._apply_highlight_filters()
         self._refresh_bottom_status()
+        self._refresh_stats_page()
         self._refresh_recording_policy_views()
 
         self.riot_api_recheck_timer = QTimer(self)
@@ -245,24 +291,261 @@ class EnhancedMainWindow(MainWindow):
         self.live_match_nav.setObjectName("NavButton")
         self.live_match_nav.setIcon(_live_match_icon())
         self.live_match_nav.setIconSize(self.highlights_nav.iconSize())
-        self.live_match_nav.setToolTip("Live Match")
-        self.live_match_nav.clicked.connect(
-            lambda: self._show_page(self.live_match_page_index)
-        )
+        self.live_match_nav.setToolTip("Live")
+        self.live_match_nav.clicked.connect(lambda: self._show_live_mode("live"))
+
+        self.draft_nav = QPushButton("")
+        self.draft_nav.setObjectName("NavButton")
+        self.draft_nav.setIcon(_draft_icon())
+        self.draft_nav.setIconSize(self.highlights_nav.iconSize())
+        self.draft_nav.setToolTip("Draft")
+        self.draft_nav.clicked.connect(lambda: self._show_live_mode("draft"))
 
         sidebar_layout = self.sidebar.layout()
-        sidebar_layout.insertWidget(1, self.live_match_nav)
+        sidebar_layout.insertWidget(0, self.live_match_nav)
+        sidebar_layout.insertWidget(1, self.draft_nav)
+
+    def _show_live_mode(self, mode: str) -> None:
+        self._active_live_mode = "draft" if mode == "draft" else "live"
+        self.live_match_page.set_focus_mode(self._active_live_mode)
+        self._show_page(self.live_match_page_index)
+
+    def _install_settings_nav(self) -> None:
+        self.settings_nav = QPushButton("")
+        self.settings_nav.setObjectName("NavButton")
+        self.settings_nav.setIcon(_app_icon("settings"))
+        self.settings_nav.setIconSize(self.highlights_nav.iconSize())
+        self.settings_nav.setToolTip("Settings")
+        self.settings_nav.clicked.connect(lambda: self._show_page(1))
+
+        sidebar_layout = self.sidebar.layout()
+        insert_index = max(0, sidebar_layout.count() - 1)
+        sidebar_layout.insertWidget(insert_index, self.settings_nav)
+
+    def _install_stats_page(self) -> None:
+        self.stats_values: dict[str, QLabel] = {}
+        self.stats_detail_values: dict[str, QLabel] = {}
+        self.stats_page = self._build_stats_page()
+        self.stats_page_index = self.pages.addWidget(self.stats_page)
+
+        self.stats_nav = QPushButton("")
+        self.stats_nav.setObjectName("NavButton")
+        self.stats_nav.setIcon(_stats_icon())
+        self.stats_nav.setIconSize(self.highlights_nav.iconSize())
+        self.stats_nav.setToolTip("Stats")
+        self.stats_nav.clicked.connect(lambda: self._show_page(self.stats_page_index))
+
+        sidebar_layout = self.sidebar.layout()
+        insert_index = max(0, sidebar_layout.count() - 1)
+        sidebar_layout.insertWidget(insert_index, self.stats_nav)
+        self._refresh_stats_page()
+
+    def _build_stats_page(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("ContentPanel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(20, 16, 20, 18)
+        layout.setSpacing(12)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        title = QLabel("Stats")
+        title.setObjectName("PageTitle")
+        header.addWidget(title)
+        header.addStretch()
+        layout.addLayout(header)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
+        cards = (
+            ("matches", "Matches"),
+            ("clips", "Clips"),
+            ("wins", "Wins"),
+            ("losses", "Losses"),
+            ("duration", "Clip time"),
+            ("storage", "Storage"),
+            ("best", "Best score"),
+            ("discord", "Share-ready"),
+        )
+        for index, (key, label) in enumerate(cards):
+            card, value = self._stats_card(label)
+            self.stats_values[key] = value
+            grid.addWidget(card, index // 4, index % 4)
+        layout.addLayout(grid)
+
+        details = QHBoxLayout()
+        details.setSpacing(10)
+        details.addWidget(self._stats_detail_panel(
+            "Library",
+            (
+                ("top_champion", "Top champion"),
+                ("recent", "Recent match"),
+                ("automatic", "Smart clips"),
+                ("manual", "Manual clips"),
+            ),
+        ))
+        details.addWidget(self._stats_detail_panel(
+            "Capture",
+            (
+                ("profile", "Profile"),
+                ("buffer", "Buffer"),
+                ("audio", "Audio"),
+                ("hotkey", "Hotkey"),
+            ),
+        ))
+        layout.addLayout(details)
+        layout.addStretch()
+        return panel
+
+    def _stats_card(self, label: str) -> tuple[QFrame, QLabel]:
+        card = QFrame()
+        card.setObjectName("ProStatsCard")
+        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        card.setMinimumHeight(92)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(4)
+
+        value = QLabel("0")
+        value.setObjectName("ProStatsValue")
+        value.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        title = QLabel(label)
+        title.setObjectName("ProStatsLabel")
+        layout.addWidget(value)
+        layout.addStretch()
+        layout.addWidget(title)
+        return card, value
+
+    def _stats_detail_panel(
+        self,
+        title: str,
+        rows: tuple[tuple[str, str], ...],
+    ) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("StatsDetailPanel")
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 11, 12, 12)
+        layout.setSpacing(8)
+
+        heading = QLabel(title)
+        heading.setObjectName("StatsDetailTitle")
+        layout.addWidget(heading)
+
+        for key, label in rows:
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(10)
+            name = QLabel(label)
+            name.setObjectName("StatsDetailLabel")
+            value = QLabel("--")
+            value.setObjectName("StatsDetailValue")
+            value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            row.addWidget(name)
+            row.addWidget(value, 1)
+            layout.addLayout(row)
+            self.stats_detail_values[key] = value
+
+        layout.addStretch()
+        return panel
+
+    @staticmethod
+    def _compact_duration(seconds: float) -> str:
+        total = max(0, int(round(seconds)))
+        hours = total // 3600
+        minutes = (total % 3600) // 60
+        if hours:
+            return f"{hours}h {minutes:02d}m"
+        return f"{minutes}m {total % 60:02d}s"
+
+    def _refresh_stats_page(self) -> None:
+        if not hasattr(self, "stats_values"):
+            return
+
+        games = list(self.controller.games())
+        clips = [clip for game in games for clip in game.clips]
+        victories = sum(1 for game in games if game.normalized_result == "Victory")
+        defeats = sum(1 for game in games if game.normalized_result == "Defeat")
+        total_size = sum(game.total_size_bytes for game in games)
+        total_duration = sum(clip.duration_seconds for clip in clips)
+        discord_ready = sum(1 for clip in clips if clip.discord_ready)
+        best_score = max((clip.highlight_score for clip in clips), default=0)
+
+        values = {
+            "matches": str(len(games)),
+            "clips": str(len(clips)),
+            "wins": str(victories),
+            "losses": str(defeats),
+            "duration": self._compact_duration(total_duration),
+            "storage": format_file_size(total_size),
+            "best": str(best_score) if best_score else "--",
+            "discord": str(discord_ready),
+        }
+        for key, text in values.items():
+            self.stats_values[key].setText(text)
+
+        champion_counts: dict[str, int] = {}
+        for game in games:
+            champion = str(game.champion_name or "").strip()
+            if champion:
+                champion_counts[champion] = champion_counts.get(champion, 0) + 1
+        if champion_counts:
+            champion, count = max(champion_counts.items(), key=lambda item: item[1])
+            top_champion = f"{champion} ({count})"
+        else:
+            top_champion = "--"
+
+        recent_game = max(games, key=lambda game: game.started_at, default=None)
+        recent_text = (
+            f"{recent_game.title_text} - {recent_game.date_text}"
+            if recent_game is not None
+            else "--"
+        )
+
+        smart_clips = sum(
+            1 for clip in clips
+            if str(clip.event_kind or "").casefold() not in {"", "manual"}
+        )
+        manual_clips = max(0, len(clips) - smart_clips)
+
+        detail_values = {
+            "top_champion": top_champion,
+            "recent": recent_text,
+            "automatic": str(smart_clips),
+            "manual": str(manual_clips),
+            "profile": f"{self.config.width}x{self.config.height} / {self.config.fps} FPS",
+            "buffer": f"{self.config.buffer_seconds}s",
+            "audio": self.bottom_audio_text.text() if hasattr(self, "bottom_audio_text") else "--",
+            "hotkey": self.config.hotkey_display,
+        }
+        for key, text in detail_values.items():
+            self.stats_detail_values[key].setText(text)
 
     def _show_page(self, index: int) -> None:
         super()._show_page(index)
         if not hasattr(self, "live_match_nav"):
             return
 
-        active = index == self.live_match_page_index
-        self.live_match_nav.setProperty("active", active)
-        self.live_match_nav.style().unpolish(self.live_match_nav)
-        self.live_match_nav.style().polish(self.live_match_nav)
-        if active:
+        live_active = index == self.live_match_page_index
+        nav_states = {
+            self.highlights_nav: index == 0,
+            self.live_match_nav: live_active and self._active_live_mode == "live",
+            self.draft_nav: live_active and self._active_live_mode == "draft",
+        }
+        if hasattr(self, "stats_nav"):
+            nav_states[self.stats_nav] = index == self.stats_page_index
+        if hasattr(self, "settings_nav"):
+            nav_states[self.settings_nav] = index == 1
+
+        for nav, active in nav_states.items():
+            nav.setProperty("active", active)
+            nav.style().unpolish(nav)
+            nav.style().polish(nav)
+
+        if live_active:
+            self.live_match_page.set_focus_mode(self._active_live_mode)
             self.live_match_page.refresh_now()
 
     def _set_sidebar_compact(self, compact: bool) -> None:
@@ -271,9 +554,14 @@ class EnhancedMainWindow(MainWindow):
             self.sidebar.setFixedWidth(58)
             self.highlights_nav.setText("")
             self.live_match_nav.setText("")
-            self.live_match_nav.setProperty("compact", compact)
-            self.live_match_nav.style().unpolish(self.live_match_nav)
-            self.live_match_nav.style().polish(self.live_match_nav)
+            for nav_name in ("live_match_nav", "draft_nav", "stats_nav", "settings_nav"):
+                nav = getattr(self, nav_name, None)
+                if nav is None:
+                    continue
+                nav.setText("")
+                nav.setProperty("compact", compact)
+                nav.style().unpolish(nav)
+                nav.style().polish(nav)
 
     # ------------------------------------------------------------------
     # Recording availability
@@ -861,6 +1149,8 @@ class EnhancedMainWindow(MainWindow):
     def refresh_clips(self) -> None:
         # MainWindow.__init__ calls this before the enhancement widgets exist.
         super().refresh_clips()
+        if hasattr(self, "stats_values"):
+            self._refresh_stats_page()
         if hasattr(self, "highlight_search"):
             QTimer.singleShot(0, self._after_library_refresh)
 

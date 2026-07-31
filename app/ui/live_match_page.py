@@ -694,8 +694,8 @@ class TeamSection(QFrame):
         self.player_cards: list[PlayerScoutCard] = []
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(9, 7, 9, 9)
-        root.setSpacing(6)
+        root.setContentsMargins(8, 6, 8, 8)
+        root.setSpacing(5)
 
         header = QHBoxLayout()
         self.heading = QLabel(title)
@@ -712,7 +712,7 @@ class TeamSection(QFrame):
 
         self.cards_layout = QGridLayout()
         self.cards_layout.setContentsMargins(0, 0, 0, 0)
-        self.cards_layout.setHorizontalSpacing(7)
+        self.cards_layout.setHorizontalSpacing(6)
         self.cards_layout.setVerticalSpacing(0)
         for column in range(5):
             self.cards_layout.setColumnStretch(column, 1)
@@ -767,6 +767,150 @@ class TeamSection(QFrame):
         self.cards_layout.addWidget(label, 0, 0, 1, 5)
 
 
+class ChampionSelectPanel(QFrame):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("ChampionSelectPanel")
+        self._always_visible = False
+        self._last_payload: dict[str, Any] = {}
+        self.setVisible(False)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 8, 10, 9)
+        root.setSpacing(6)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        self.title = QLabel("Champion Select")
+        self.title.setObjectName("ChampionSelectTitle")
+        self.summary = QLabel("Waiting for picks")
+        self.summary.setObjectName("ChampionSelectSummary")
+        self.summary.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        header.addWidget(self.title)
+        header.addStretch()
+        header.addWidget(self.summary, 1)
+        root.addLayout(header)
+
+        self.teams_line = QLabel("")
+        self.teams_line.setObjectName("ChampionSelectTeams")
+        self.teams_line.setWordWrap(True)
+        root.addWidget(self.teams_line)
+
+        self.recommendations_layout = QGridLayout()
+        self.recommendations_layout.setContentsMargins(0, 0, 0, 0)
+        self.recommendations_layout.setHorizontalSpacing(7)
+        self.recommendations_layout.setVerticalSpacing(5)
+        for column in range(3):
+            self.recommendations_layout.setColumnStretch(column, 1)
+        root.addLayout(self.recommendations_layout)
+
+    def clear_recommendations(self) -> None:
+        while self.recommendations_layout.count():
+            item = self.recommendations_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def set_always_visible(self, enabled: bool) -> None:
+        self._always_visible = bool(enabled)
+        if self._always_visible and not self._last_payload:
+            self.show_waiting()
+        elif not self._always_visible and not self._last_payload:
+            self.clear_recommendations()
+            self.setVisible(False)
+
+    def show_waiting(self) -> None:
+        self.summary.setText("Waiting for champion select")
+        self.teams_line.setText("Allies: waiting    Enemies: waiting")
+        self.clear_recommendations()
+        empty = QLabel("No visible draft yet.")
+        empty.setObjectName("ChampionSelectEmpty")
+        empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.recommendations_layout.addWidget(empty, 0, 0, 1, 3)
+        self.setVisible(True)
+
+    @staticmethod
+    def _names(players: list[dict[str, Any]], fallback: str) -> str:
+        names = [
+            str(player.get("champion", "") or "").strip()
+            for player in players
+            if str(player.get("champion", "") or "").strip()
+        ]
+        return ", ".join(names[:5]) if names else fallback
+
+    def set_advice(self, payload: dict[str, Any]) -> None:
+        self._last_payload = dict(payload or {})
+        if not payload:
+            if self._always_visible:
+                self.show_waiting()
+            else:
+                self.clear_recommendations()
+                self.setVisible(False)
+            return
+
+        allies = list(payload.get("allies", ()) or ())
+        enemies = list(payload.get("enemies", ()) or ())
+        recommendations = list(payload.get("recommendations", ()) or ())
+        self.summary.setText(str(payload.get("summary", "") or "Waiting for enemy picks"))
+        self.teams_line.setText(
+            f"Allies: {self._names(allies, 'waiting')}    "
+            f"Enemies: {self._names(enemies, 'waiting')}"
+        )
+
+        self.clear_recommendations()
+        if not recommendations:
+            empty = QLabel("Enemy picks are not visible yet.")
+            empty.setObjectName("ChampionSelectEmpty")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.recommendations_layout.addWidget(empty, 0, 0, 1, 3)
+        else:
+            for index, recommendation in enumerate(recommendations[:6]):
+                tile = QFrame()
+                tile.setObjectName("ChampionRecommendation")
+                tile_layout = QVBoxLayout(tile)
+                tile_layout.setContentsMargins(8, 7, 8, 8)
+                tile_layout.setSpacing(4)
+
+                tile_header = QHBoxLayout()
+                tile_header.setSpacing(6)
+                champion = QLabel(str(recommendation.get("champion", "") or "Champion"))
+                champion.setObjectName("ChampionRecommendationName")
+                score = int(recommendation.get("score", 0) or 0)
+                roles = ", ".join(str(role) for role in recommendation.get("role_names", []) if role)
+                champion.setToolTip(f"{roles} - fit score {score}/100" if roles else f"Fit score {score}/100")
+                tile_header.addWidget(champion, 1)
+
+                score_chip = QLabel(str(score))
+                score_chip.setObjectName("ChampionRecommendationScore")
+                score_chip.setProperty(
+                    "tier",
+                    "high" if score >= 85 else "medium" if score >= 72 else "base",
+                )
+                score_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                score_chip.setToolTip(f"Fit score {score}/100")
+                tile_header.addWidget(score_chip)
+                tile_layout.addLayout(tile_header)
+
+                meta = QLabel(roles or "Flexible")
+                meta.setObjectName("ChampionRecommendationMeta")
+                tile_layout.addWidget(meta)
+
+                reasons = [
+                    str(reason)
+                    for reason in recommendation.get("reasons", ())
+                    if str(reason).strip()
+                ]
+                detail = QLabel("; ".join(reasons[:2]) or "Solid blind option")
+                detail.setObjectName("ChampionRecommendationDetail")
+                detail.setWordWrap(True)
+                tile_layout.addWidget(detail)
+
+                row = index // 3
+                column = index % 3
+                self.recommendations_layout.addWidget(tile, row, column)
+        self.setVisible(True)
+
+
 class LiveMatchPage(QFrame):
     settings_requested = Signal()
 
@@ -785,20 +929,20 @@ class LiveMatchPage(QFrame):
         self.client_asset_provider.role_icon_ready.connect(self._apply_role_asset)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 12, 20, 10)
-        root.setSpacing(7)
+        root.setContentsMargins(18, 10, 18, 10)
+        root.setSpacing(6)
 
         header = QHBoxLayout()
         titles = QVBoxLayout()
         titles.setSpacing(0)
 
-        title = QLabel("Live Match")
-        title.setObjectName("PageTitle")
-        titles.addWidget(title)
+        self.page_title = QLabel("Live Match")
+        self.page_title.setObjectName("PageTitle")
+        titles.addWidget(self.page_title)
 
-        subtitle = QLabel("Quick scouting for all ten players.")
-        subtitle.setObjectName("PageSubtitle")
-        titles.addWidget(subtitle)
+        self.page_subtitle = QLabel("Quick scouting for all ten players.")
+        self.page_subtitle.setObjectName("PageSubtitle")
+        titles.addWidget(self.page_subtitle)
         header.addLayout(titles, 1)
 
         self.refresh_button = QPushButton("Refresh")
@@ -835,6 +979,9 @@ class LiveMatchPage(QFrame):
         api_layout.addWidget(settings_button)
         root.addWidget(self.api_banner)
 
+        self.champion_select_panel = ChampionSelectPanel()
+        root.addWidget(self.champion_select_panel)
+
         self.allies_section = TeamSection("YOUR TEAM")
         self.enemies_section = TeamSection("ENEMY TEAM")
         root.addWidget(self.allies_section)
@@ -843,6 +990,7 @@ class LiveMatchPage(QFrame):
 
         self.scout = LiveMatchScout(config, self)
         self.scout.roster_changed.connect(self.set_roster)
+        self.scout.champion_select_changed.connect(self.champion_select_panel.set_advice)
         self.scout.player_stats_changed.connect(self.apply_player_stats)
         self.scout.status_changed.connect(self.set_status)
         self.refresh_button.clicked.connect(lambda: self.scout.refresh(force=True))
@@ -850,6 +998,18 @@ class LiveMatchPage(QFrame):
         self._show_empty_state()
         self._sync_api_banner()
         self.scout.start()
+
+    def set_focus_mode(self, mode: str) -> None:
+        draft_mode = str(mode or "").casefold() == "draft"
+        self.page_title.setText("Draft" if draft_mode else "Live Match")
+        self.page_subtitle.setText(
+            "Champion select recommendations."
+            if draft_mode
+            else "Quick scouting for all ten players."
+        )
+        self.champion_select_panel.set_always_visible(draft_mode)
+        self.allies_section.setVisible(not draft_mode)
+        self.enemies_section.setVisible(not draft_mode)
 
     def refresh_now(self) -> None:
         self.scout.refresh(force=True)
@@ -936,18 +1096,29 @@ class LiveMatchPage(QFrame):
         self.client_asset_provider.request_role(card.role_code)
         return card
 
-    def _apply_champion_icon(self, champion_key: str, pixmap: QPixmap) -> None:
+    def _unique_cards(self) -> list[PlayerScoutCard]:
+        seen: set[int] = set()
+        cards: list[PlayerScoutCard] = []
         for card in self._cards.values():
+            marker = id(card)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            cards.append(card)
+        return cards
+
+    def _apply_champion_icon(self, champion_key: str, pixmap: QPixmap) -> None:
+        for card in self._unique_cards():
             if card.champion_key == champion_key:
                 card.set_champion_icon(pixmap)
 
     def _apply_rank_asset(self, tier: str, pixmap: QPixmap) -> None:
-        for card in self._cards.values():
+        for card in self._unique_cards():
             if card.rank_tier == tier:
                 card.set_rank_asset(pixmap)
 
     def _apply_role_asset(self, role: str, pixmap: QPixmap) -> None:
-        for card in self._cards.values():
+        for card in self._unique_cards():
             if card.role_code == role:
                 card.set_role_asset(pixmap)
 
