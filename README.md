@@ -1,201 +1,139 @@
-<p align="center">
-  <img src="app/assets/logo.png" width="88" alt="League Highlights logo">
-</p>
+# League Highlights 2 (Rust)
 
-<h1 align="center">League Highlights</h1>
+A Rust rewrite of [League Highlights](https://github.com/Kirbyy1/League-Highlights):
+a privacy-first League of Legends highlight recorder for Windows. It keeps a
+rolling buffer while a match runs, saves clips on a global shortcut, and lets
+Smart Highlights keep kills, multikills, outnumbered plays, support impact,
+low-health survivals and objective steals automatically.
 
-<p align="center">
-  A lightweight, privacy-first League of Legends highlight recorder for Windows.
-</p>
-
-<p align="center">
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
-  <img alt="Platform" src="https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D4?logo=windows&logoColor=white">
-  <img alt="UI" src="https://img.shields.io/badge/UI-PySide6-41CD52?logo=qt&logoColor=white">
-  <img alt="Capture" src="https://img.shields.io/badge/Capture-FFmpeg-007808?logo=ffmpeg&logoColor=white">
-</p>
-
-<p align="center">
-  <img src="docs/images/league-highlights-showcase.png" alt="League Highlights application showcase">
-</p>
-
-League Highlights keeps a short rolling buffer while a League match is running. Press a configurable global hotkey to save the latest action, or let Smart Highlights automatically preserve kills, objectives, outnumbered fights, support impact, low-health survivals, and other high-value moments.
-
-The application is designed to stay local. Clips remain on the computer unless the user explicitly exports or sends them.
+One ~2 MB executable plus `ffmpeg.exe`. No Python runtime, no Qt, no ffprobe.
 
 ## Features
 
-### Lightweight recording
+- **Lightweight recording**: FFmpeg Desktop Duplication with NVENC, Quick Sync
+  or AMF (zero-copy on NVIDIA at native resolution), WASAPI system and
+  microphone audio, and low-priority capture with a disk-space guard.
+- **Smart Highlights V2**: fight grouping, adaptive pre/post-roll, duplicate
+  suppression, explainable scores, and ratings that tune future clips.
+- **In-game toast**: a small click-through notice over the game when a clip
+  is saved (or fails).
+- **Post-match review**: when a game ends, step through its new clips and keep,
+  rate or delete each with one key.
+- **Library**: match-grouped highlights with champion art, a custom player
+  with event markers, lossless trim and Smart Trim, and multi-select.
+- **Sharing**: copy a clip to the clipboard (paste into Discord), or make a
+  Discord-ready copy that fits your upload limit.
+- **Storage**: usage and free space at a glance, plus optional automatic
+  clean-up (clips rated Good are never removed).
+- **Setup check**: verifies FFmpeg, encoder, capture, League's window mode,
+  audio, clip folder and disk space, with one-click fixes.
 
-- Automatically detects the League of Legends game window.
-- Records at 720p, 900p, or 1080p and 30 or 60 FPS.
-- Uses FFmpeg Desktop Duplication when available.
-- Prefers healthy NVIDIA NVENC, Intel Quick Sync, or AMD AMF hardware encoding.
-- Falls back safely when a hardware encoder is unavailable or unhealthy.
-- Captures Windows system audio through WASAPI loopback.
-- Supports optional microphone capture with separate volume controls.
-- Provides encoder, FPS, duplicated-frame, dropped-frame, and capture-backend diagnostics.
+## Footprint
 
-### Smart Highlights V2
+Measured on the release build:
 
-- Groups related kills, assists, and objective steals into one fight highlight.
-- Detects single, double, triple, quadra, and pentakills.
-- Detects Dragon, Baron, Elder, ace, and objective steals.
-- Recognizes outnumbered plays, including strong 2v1 double-kill situations.
-- Scores low-health survival, support impact, converted engages, and teamfight participation.
-- Uses adaptive pre-roll and post-roll for longer or higher-value fights.
-- Suppresses overlapping automatic clips before they reach the save queue.
-- Offers Strict, Balanced, and Save More sensitivity modes.
-- Stores explainable score reasons locally.
+| | |
+|---|---|
+| Idle in the tray | ~0 CPU, ~2.5–4.5 MB private memory |
+| Polling a live match (not recording) | ~0.4 % of one core |
+| Library window open | 5 processes, ~140 MB private (released when closed or minimized) |
+| Recording 1080p60 on NVENC | FFmpeg ≈ 0.5 % CPU (frames stay on the GPU) |
+| Saving a clip | 1 FFmpeg run, ~1.7 s for a 10 s clip |
 
-### Match-based library and player
+## Install
 
-- Groups highlights by match instead of showing one flat file list.
-- Includes match search and Victory or Defeat filters.
-- Loads match cards progressively for large libraries.
-- Uses an embedded media-first player.
-- Shows a match timeline with colored highlight markers.
-- Includes trim handles, cached filmstrip previews, fullscreen playback, and Smart Trim suggestions.
-- Releases inactive video-player resources when leaving a match.
+Run `LeagueHighlightsSetup-<version>.exe`. It installs for the current user
+(no administrator prompt) to `%LOCALAPPDATA%\Programs\League Highlights`, adds
+a Start-menu entry and optionally starts with Windows. Uninstalling keeps your
+clips and settings.
 
-### Share and export
+The portable zip works too: unzip anywhere and run `LeagueHighlights.exe`.
 
-- Saves separate high-quality share copies without replacing the original highlight.
-- Creates size-targeted Discord copies.
-- Can reveal exported files in File Explorer immediately.
-- Optionally sends through the user's own Discord webhook.
-- Protects saved webhook data with Windows DPAPI.
-- Keeps heavy FFmpeg jobs off the UI thread and limits concurrent exports.
+Requirements: Windows 10 1809+ or 11 (64-bit), League in **Borderless** or
+Windowed mode. The library window uses the WebView2 runtime that ships with
+Windows 11 (on Windows 10 without it, the library opens in your browser).
 
-### Performance and reliability
-
-- Reduces League and metadata polling while no match is active.
-- Caches unchanged clip metadata and preview filmstrips.
-- Keeps rolling segments and temporary files bounded.
-- Cleans stale temporary data left by interrupted sessions.
-- Adds low-disk-space protection.
-- Validates saved clips before adding them to the library.
-- Attempts limited automatic recovery after an unexpected recorder stop.
-- Reduces UI refresh frequency while minimized or hidden.
-
-## Privacy
-
-- No Riot API key is required.
-- Match context is read from Riot's local Live Client Data API while the game is running.
-- Clips, ratings, settings, and metadata are stored locally.
-- Gameplay is never uploaded automatically.
-- Discord sharing only occurs after an explicit user action.
-- Webhook URLs are encrypted and are not written to application logs.
-
-## Requirements
-
-### Packaged application
-
-- Windows 10 or Windows 11, 64-bit
-- League of Legends in Borderless or Windowed mode
-- Updated graphics and audio drivers
-
-The packaged build includes the Python runtime, FFmpeg, and FFprobe. End users do not need to install Python.
-
-### Development
-
-- Python 3.11 to 3.14
-- PowerShell
-- Inno Setup 6 for creating the installer
-
-Exclusive fullscreen is not currently supported reliably because capture uses the composed Windows desktop region.
-
-## Development setup
-
-Open PowerShell in the project directory:
+## Build
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\setup.ps1
+cargo build --release --locked
+.\scripts\download_ffmpeg.ps1        # ffmpeg.exe next to target\release\LeagueHighlights.exe
+cargo test --release
 ```
 
-Then run:
+### Release
 
 ```powershell
-.\run.bat
+.\scripts\package.ps1                # zip + installer + SHA256SUMS in dist\
+.\scripts\package.ps1 -Ffmpeg C:\path\to\ffmpeg.exe
 ```
 
-For PyCharm, select:
+Needs [Inno Setup 6](https://jrsoftware.org/isinfo.php) for the installer
+(`winget install JRSoftware.InnoSetup`); `-NoInstaller` builds only the zip.
+Tag releases `v2.x.y`: the in-app update check compares against the latest
+GitHub release, so the older Python `v1.x` releases are never offered.
 
-```text
-.venv\Scripts\python.exe
+## Run
+
+- `LeagueHighlights.exe` starts in the tray and opens the library window.
+- `--startup` starts quietly (used by Start with Windows).
+- `--selftest` records the primary monitor for 8 seconds and saves one clip;
+  `--selftest --synthetic` uses a CPU test pattern instead.
+- `LH_DATA_DIR` points the app at a portable or sandboxed data folder.
+
+## Network use
+
+Gameplay never leaves the PC. The app contacts only:
+
+- Riot's local Live Client and League Client APIs on `127.0.0.1` during games;
+- Riot's Data Dragon CDN for champion icons and splash art, once per champion
+  (Settings → App → Champion art);
+- GitHub's releases API every few hours to show an update link
+  (Settings → App → Check for updates).
+
+## Files
+
+| What | Where |
+|---|---|
+| Clips | `%USERPROFILE%\Videos\League Highlights` (configurable) |
+| Discord copies | `<clip folder>\Shared` |
+| Settings | `%LOCALAPPDATA%\LeagueHighlights\settings.json` |
+| Log | `%LOCALAPPDATA%\LeagueHighlights\logs\league_highlights.log` |
+
+Settings, clips and clip metadata are compatible with the Python version.
+
+## Layout
+
+```
+src/main.rs        startup, threads, single instance
+src/controller.rs  game-window state machine, recovery, export worker
+src/recorder.rs    FFmpeg rolling segment capture and timing
+src/audio.rs       WASAPI loopback / microphone ring buffers
+src/live.rs        Live Client polling, Smart Highlights V2
+src/scoring.rs     scoring, ratings feedback, Smart Trim
+src/lcu.rs         queue filter via the League Client
+src/exporter.rs    segments to clip (single FFmpeg run)
+src/library.rs     metadata, review flag, storage, clean-up, trim
+src/share.rs       Discord-sized copies
+src/setup.rs       first-run setup check
+src/update.rs      GitHub release check
+src/web.rs         localhost UI server (token, host and CSRF checks)
+src/window.rs      WebView2 window with custom title bar
+src/overlay.rs     in-game toast
+src/tray.rs        notification-area icon and menu
+src/hotkey.rs      low-level keyboard hook
+ui/index.html      library, player, review, settings
+installer/         Inno Setup script
+scripts/           FFmpeg download and release packaging
 ```
 
-and run `main.py`.
+## Licences and notices
 
-## Tests
+`ffmpeg.exe` is FFmpeg, licensed under the GPL or LGPL depending on the
+build; `scripts\package.ps1` records the bundled build in
+`THIRD-PARTY-NOTICES.txt`.
 
-```powershell
-.\.venv\Scripts\python.exe .\scripts\test_smart_highlights_v2.py
-.\.venv\Scripts\python.exe .\scripts\test_performance_reliability.py
-```
-
-## Build the Windows application
-
-```powershell
-.\build_exe.ps1
-```
-
-The packaged application is created under:
-
-```text
-dist\LeagueHighlights
-```
-
-Release assets are created under:
-
-```text
-release\<version>
-```
-
-A normal release contains:
-
-```text
-LeagueHighlights-<version>.zip
-LeagueHighlightsSetup-<version>.exe
-update.json
-SHA256SUMS.txt
-```
-
-## Saved files
-
-Highlights:
-
-```text
-%USERPROFILE%\Videos\League Highlights
-```
-
-Logs:
-
-```text
-%LOCALAPPDATA%\LeagueHighlights\logs\league_highlights.log
-```
-
-## Project structure
-
-```text
-app/
-  services/        Recording, Riot events, scoring, trimming, export, and storage
-  ui/              PySide6 windows, player, timeline, and dialogs
-  assets/          Application logo and Windows icon
-docs/images/       README and promotional images
-scripts/           Build, test, and FFmpeg setup scripts
-main.py            Application entry point
-build_exe.ps1      PyInstaller and release build script
-setup.ps1          Development setup
-```
-
-## Current status
-
-League Highlights is an active Windows desktop project. Core capture, Smart Highlights V2, support detection, match grouping, playback, trimming, diagnostics, automatic updates, tray integration, startup behavior, and export workflows are implemented.
-
-The detector uses Riot's local event and state data rather than expensive video AI. It can understand kills, multikills, assists, health, deaths, objectives, steals, and fight context, but it cannot reliably judge visual mechanics such as skillshot dodges, animation cancels, or mechanically beautiful movement from the video alone.
-
-## Riot Games notice
-
-League Highlights is an independent project and is not endorsed by Riot Games. League of Legends and Riot Games are trademarks or registered trademarks of Riot Games, Inc.
+League Highlights isn't endorsed by Riot Games and doesn't reflect the views or
+opinions of Riot Games or anyone officially involved in producing or managing
+Riot Games properties. Riot Games, and all associated properties are
+trademarks or registered trademarks of Riot Games, Inc.
