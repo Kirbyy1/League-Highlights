@@ -193,6 +193,23 @@ body.selecting #selbar { display: flex; }
 .upd { width: 100%; justify-content: center; color: var(--accent); font-size: 12.5px; padding: 5px 8px; }
 .upd[hidden] { display: none; }
 
+/* ---------- clip panel: watch / Edit / Share ---------- */
+button.outline { border: 1px solid var(--line); color: var(--text); }
+button.outline.on { border-color: var(--accent); color: var(--accent); background: none; }
+.drop { position: relative; display: inline-flex; }
+.drop .menu { top: 38px; }
+.menu button { align-items: flex-start; text-align: left; padding: 8px 10px; }
+.menu button .i { margin-top: 2px; }
+.menu button small { display: block; color: var(--faint); font-size: 11.5px; margin-top: 1px; }
+#player:not(.editing) .scrub .trim, #player:not(.editing) .scrub .h { display: none; }
+#player.editing .scrub .played { opacity: .55; }
+.edhead { display: flex; align-items: center; gap: 8px; }
+.edhead h3 { margin: 12px 0 4px; }
+.edhead button { border: 1px solid var(--line); color: var(--text); }
+.radio { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; margin-right: 6px; }
+.radio.off { opacity: .45; cursor: default; }
+.radio input { accent-color: var(--accent); }
+
 /* ---------- clip editor (flat rows, like settings) ---------- */
 .editor { margin-top: 18px; padding-top: 6px; border-top: 1px solid var(--line); }
 .editor[hidden] { display: none; }
@@ -870,22 +887,34 @@ function openGame(game, clip, keepScroll) {
 }
 
 let clipActions = {};
+let previewAudio = null;
+function stopPreview() { if (previewAudio) { previewAudio.pause(); previewAudio = null; } }
+async function loadMusic() {
+  try { state.music = (await api("/api/music")).tracks; } catch { state.music = []; }
+  return state.music;
+}
+
+/* The clip panel has three modes of use:
+   watch (default) · Edit (trim + music, one Save) · Share (copy, Discord, Explorer). */
 function selectClip(clip) {
   if (!clip) return;
+  stopPreview();
   state.clip = clip;
   $$("#detail .tile, #detail .mk").forEach(el => el.classList.toggle("sel", el.dataset.file === clip.file));
   const dur = clip.duration_seconds || 0;
   state.trim = [0, dur];
   const reasons = clip.score_reasons || [];
   const vol = store.get("lh.volume", 1), muted = store.get("lh.muted", false);
-  $("#player").innerHTML = `
+  const player = $("#player");
+  player.classList.remove("editing");
+  player.innerHTML = `
     <div class="stage" id="stage">
       <video id="video" preload="metadata" ${clip.has_thumb ? `poster="/thumb/${encodeURIComponent(clip.file)}"` : ""} src="/media/${encodeURIComponent(clip.file)}"></video>
       <button class="big" id="bigPlay" title="Play (Space)">${icon("play")}</button>
     </div>
     <div class="scrub" id="scrub"><div class="rail"></div><div class="trim" id="trimSel"></div><div class="played" id="played"></div>
       ${(clip.events || []).map(e => `<div class="tick" style="left:${(e.relative_time / Math.max(dur, .1) * 100).toFixed(2)}%;--c:${EVENT_COLORS[e.type] || "#8a8a86"}" title="${esc(title(e.type))}"></div>`).join("")}
-      <div class="h" id="h0" title="Trim start (I)"></div><div class="h" id="h1" title="Trim end (O)"></div><div class="head" id="head"></div><div class="hover" id="hoverT"></div></div>
+      <div class="h" id="h0" title="Drag to set the start"></div><div class="h" id="h1" title="Drag to set the end"></div><div class="head" id="head"></div><div class="hover" id="hoverT"></div></div>
     <div class="controls">
       <button class="ibtn" id="pp" title="Play (Space)">${icon("play")}</button>
       <span class="time" id="time">00:00 / ${mmss(dur)}</span>
@@ -897,28 +926,28 @@ function selectClip(clip) {
     </div>
     <div class="cliphead">
       <div><div class="label">${esc(title(clip.label))}</div>
-      <div class="sub">${esc(dateText(new Date(clip.created_at)))} · ${mmss(dur)} · ${size(clip.size_bytes)}${clip.highlight_score ? " · score " + clip.highlight_score : ""}</div></div>
+      <div class="sub">${esc(dateText(new Date(clip.created_at)))} · ${mmss(dur)} · ${size(clip.size_bytes)}${clip.highlight_score ? " · score " + clip.highlight_score : ""}${clip.edited ? " · edited" : ""}</div></div>
       <div class="tools">
-        <button id="bEdit" title="Add background music and export (E)">${icon("music")}Edit</button>
-        <button id="bCopy" title="Copy video — paste into Discord or a chat (Ctrl+C)">${icon("copy")}Copy</button>
-        <button id="bDiscord" title="Make a copy under your Discord upload limit from the trimmed range">${icon("send")}Discord</button>
-        <button class="ibtn ${clip.rating === "good" ? "on good" : ""}" id="rGood" title="Good clip (G)">${icon("up")}</button>
-        <button class="ibtn ${clip.rating === "bad" ? "on bad" : ""}" id="rBad" title="Not impressive (B)">${icon("down")}</button>
-        <button class="ibtn" id="bMore" title="More">${icon("more")}</button>
-        <div class="menu" id="menu"><button id="bReveal">${icon("reveal")}Show in Explorer</button><button id="bDelete" class="danger">${icon("bin")}Delete clip</button></div>
+        <button class="outline" id="bEdit" title="Trim the clip or add music (E)">${icon("cut")}Edit</button>
+        <span class="drop">
+          <button class="outline" id="bShare" title="Copy, make a Discord copy or show the file">${icon("send")}Share</button>
+          <div class="menu" id="shareMenu">
+            <button id="sCopy">${icon("copy")}<span>Copy video<small>Paste into Discord or any chat with Ctrl+V</small></span></button>
+            <button id="sDiscord">${icon("send")}<span>Discord-ready copy<small id="sDiscordSub">Fits your upload limit</small></span></button>
+            <button id="sReveal">${icon("reveal")}<span>Show in Explorer<small>Open the folder with this file</small></span></button>
+          </div>
+        </span>
+        <button class="ibtn ${clip.rating === "good" ? "on good" : ""}" id="rGood" title="Good clip (G): Smart Highlights keeps more like this">${icon("up")}</button>
+        <button class="ibtn ${clip.rating === "bad" ? "on bad" : ""}" id="rBad" title="Not impressive (B): Smart Highlights keeps fewer like this">${icon("down")}</button>
+        <span class="drop">
+          <button class="ibtn" id="bMore" title="More">${icon("more")}</button>
+          <div class="menu" id="moreMenu"><button id="bDelete" class="danger">${icon("bin")}<span>Delete clip</span></button></div>
+        </span>
       </div>
     </div>
-    ${reasons.length ? `<div class="reasons">${reasons.map(r => `<span>${esc(r)}</span>`).join("")}</div>` : ""}
-    <div class="trimbar">
-      ${icon("cut")}<span class="rng" id="trimText"></span>
-      <button id="tStart" title="Trim start at playhead (I)">Set start</button>
-      <button id="tEnd" title="Trim end at playhead (O)">Set end</button>
-      <button id="tSmart" ${clip.suggested_trim_start == null ? "disabled" : ""} title="${esc(clip.smart_trim_reason || "Smart trim")}">${icon("spark")}Smart trim</button>
-      <span class="grow"></span>
-      <label><input type="checkbox" id="tReplace"> Replace original</label>
-      <button id="tSave" class="primary">Save trim</button>
-    </div>
+    ${reasons.length ? `<div class="reasons" title="Why Smart Highlights kept this">${reasons.map(r => `<span>${esc(r)}</span>`).join("")}</div>` : ""}
     <div class="editor" id="editor" hidden></div>`;
+
   const video = $("#video"), stage = $("#stage"), scrub = $("#scrub");
   video.volume = vol; video.muted = muted;
   const pct = t => (Math.max(0, Math.min(dur, t)) / Math.max(dur, .1) * 100) + "%";
@@ -926,7 +955,7 @@ function selectClip(clip) {
     const [a, b] = state.trim;
     $("#h0").style.left = pct(a); $("#h1").style.left = pct(b);
     $("#trimSel").style.left = pct(a); $("#trimSel").style.width = ((b - a) / Math.max(dur, .1) * 100) + "%";
-    $("#trimText").textContent = `${mmss(a)} – ${mmss(b)} · ${(b - a).toFixed(1)}s`;
+    const t = $("#eRange"); if (t) t.textContent = `${mmss(a)} – ${mmss(b)} · ${(b - a).toFixed(1)}s`;
   };
   const drawTime = () => {
     $("#head").style.left = pct(video.currentTime); $("#played").style.width = pct(video.currentTime);
@@ -940,9 +969,8 @@ function selectClip(clip) {
   video.onplay = () => playing(true); video.onpause = video.onended = () => playing(false);
   video.ontimeupdate = drawTime;
   video.onclick = toggle; $("#bigPlay").onclick = toggle; $("#pp").onclick = toggle;
-  video.ondblclick = () => fullscreen();
   const fullscreen = () => document.fullscreenElement ? document.exitFullscreen() : stage.requestFullscreen().catch(() => {});
-  $("#fs").onclick = fullscreen;
+  video.ondblclick = fullscreen; $("#fs").onclick = fullscreen;
   const speeds = [1, 1.5, 2, 0.5, 0.25];
   $("#speed").onclick = () => { const i = (speeds.indexOf(video.playbackRate) + 1) % speeds.length; video.playbackRate = speeds[i]; $("#speed").textContent = speeds[i] + "×"; };
   const setMute = m => { video.muted = m; store.set("lh.muted", m); $("#muteBtn").innerHTML = icon(m ? "mute" : "vol"); };
@@ -971,67 +999,69 @@ function selectClip(clip) {
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
   $("#h0").onpointerdown = drag(0); $("#h1").onpointerdown = drag(1);
-  const setIn = () => { state.trim[0] = Math.max(0, Math.min(video.currentTime, state.trim[1] - .5)); drawTrim(); };
-  const setOut = () => { state.trim[1] = Math.min(dur, Math.max(video.currentTime, state.trim[0] + .5)); drawTrim(); };
-  const rate = r => api(`/api/clip/${encodeURIComponent(clip.file)}/rate`, { rating: clip.rating === r ? "" : r }).then(() => { toast(clip.rating === r ? "Rating cleared" : "Thanks — Smart Highlights will learn from this"); loadClips(); }).catch(e => toast(e.message, false));
-  const remove = async () => {
-    if (!confirm(`Delete "${title(clip.label)}"? The video file is removed permanently.`)) return;
-    video.removeAttribute("src"); video.load();
-    await api(`/api/clip/${encodeURIComponent(clip.file)}/delete`, {}).catch(e => toast(e.message, false));
-    state.clip = null; toast("Clip deleted"); loadClips();
-  };
-  $("#tStart").onclick = setIn; $("#tEnd").onclick = setOut;
-  $("#tSmart").onclick = () => { state.trim = [clip.suggested_trim_start, clip.suggested_trim_end]; video.currentTime = state.trim[0]; drawTrim(); drawTime(); toast(clip.smart_trim_reason || "Smart trim applied"); };
-  $("#tSave").onclick = async () => {
-    const replace = $("#tReplace").checked;
-    if (replace && !confirm("Replace the original clip with the trimmed version?")) return;
-    $("#tSave").disabled = true; $("#tSave").textContent = "Saving…";
-    if (replace) { video.removeAttribute("src"); video.load(); }
+
+  // ---- menus ----
+  const menus = ["#shareMenu", "#moreMenu"];
+  const openMenu = id => e => { e.stopPropagation(); menus.forEach(m => $(m).classList.toggle("on", m === id && !$(m).classList.contains("on"))); };
+  $("#bShare").onclick = openMenu("#shareMenu");
+  $("#bMore").onclick = openMenu("#moreMenu");
+
+  // ---- share ----
+  const f = encodeURIComponent(clip.file);
+  const copyClip = () => api(`/api/clip/${f}/copy`, {}).then(() => toast("Video copied — paste with Ctrl+V")).catch(e => toast(e.message, false));
+  $("#sCopy").onclick = copyClip;
+  $("#sReveal").onclick = () => api(`/api/clip/${f}/reveal`, {});
+  $("#sDiscord").onclick = async () => {
+    const [a, b] = editing() ? state.trim : [0, dur];
+    toast(`Making a Discord copy (${(b - a).toFixed(0)}s)…`);
     try {
-      const r = await api(`/api/clip/${encodeURIComponent(clip.file)}/trim`, { start: state.trim[0], end: state.trim[1], replace });
-      toast("Trimmed clip saved");
-      state.clip = { file: r.file };
-      await loadClips();
-    } catch (e) { toast(e.message, false); $("#tSave").disabled = false; $("#tSave").textContent = "Save trim"; }
-  };
-  $("#rGood").onclick = () => rate("good"); $("#rBad").onclick = () => rate("bad");
-  $("#bMore").onclick = e => { e.stopPropagation(); $("#menu").classList.toggle("on"); };
-  $("#bReveal").onclick = () => api(`/api/clip/${encodeURIComponent(clip.file)}/reveal`, {});
-  const copyClip = () => api(`/api/clip/${encodeURIComponent(clip.file)}/copy`, {}).then(() => toast("Video copied — paste with Ctrl+V")).catch(e => toast(e.message, false));
-  $("#bCopy").onclick = copyClip;
-  $("#bDiscord").onclick = async () => {
-    const b = $("#bDiscord"); b.disabled = true; b.lastChild.textContent = "Exporting…";
-    toast(`Making a Discord copy of ${(state.trim[1] - state.trim[0]).toFixed(0)}s…`);
-    try {
-      const r = await api(`/api/clip/${encodeURIComponent(clip.file)}/discord`, { start: state.trim[0], end: state.trim[1] });
+      const r = await api(`/api/clip/${f}/discord`, { start: a, end: b });
       toast(`Discord copy ready (${size(r.size)})${r.copied ? " — copied, paste with Ctrl+V" : ""}`);
       loadStorage();
     } catch (e) { toast(e.message, false); }
-    b.disabled = false; b.lastChild.textContent = "Discord";
+  };
+  $("#bShare").addEventListener("click", () => {
+    $("#sDiscordSub").textContent = editing() ? `Of the edit range · fits your upload limit` : `Of the whole clip · fits your upload limit`;
+  });
+
+  // ---- rate / delete ----
+  const rate = r => api(`/api/clip/${f}/rate`, { rating: clip.rating === r ? "" : r }).then(() => { toast(clip.rating === r ? "Rating cleared" : "Thanks — Smart Highlights will learn from this"); loadClips(); }).catch(e => toast(e.message, false));
+  $("#rGood").onclick = () => rate("good"); $("#rBad").onclick = () => rate("bad");
+  const remove = async () => {
+    if (!confirm(`Delete "${title(clip.label)}"? The video file is removed permanently.`)) return;
+    video.removeAttribute("src"); video.load();
+    await api(`/api/clip/${f}/delete`, {}).catch(e => toast(e.message, false));
+    state.clip = null; toast("Clip deleted"); loadClips(); loadStorage();
   };
   $("#bDelete").onclick = remove;
+
+  // ---- edit mode ----
+  const editing = () => player.classList.contains("editing");
+  const editor = buildEditor(clip, video, dur, drawTrim, drawTime);
+  const setIn = () => { if (!editing()) editor.open(); state.trim[0] = Math.max(0, Math.min(video.currentTime, state.trim[1] - .5)); drawTrim(); };
+  const setOut = () => { if (!editing()) editor.open(); state.trim[1] = Math.min(dur, Math.max(video.currentTime, state.trim[0] + .5)); drawTrim(); };
+  editor.setIn = setIn; editor.setOut = setOut;
+  $("#bEdit").onclick = () => editing() ? editor.close() : editor.open();
+
   clipActions = {
     setIn, setOut, rate, remove, toggle, fullscreen, copy: copyClip,
+    edit: () => editing() ? editor.close() : editor.open(),
     mute: () => setMute(!video.muted),
     seek: d => { video.currentTime = Math.max(0, Math.min(dur, video.currentTime + d)); drawTime(); },
   };
   drawTrim(); drawTime();
-  setupEditor(clip, video, dur);
 }
-document.addEventListener("click", () => { const m = $("#menu"); if (m) m.classList.remove("on"); });
+document.addEventListener("click", () => $$(".menu.on").forEach(m => m.classList.remove("on")));
 
-/* ---------- clip editor: background music ---------- */
-let previewAudio = null;
-function stopPreview() { if (previewAudio) { previewAudio.pause(); previewAudio = null; } }
-async function loadMusic() {
-  try { state.music = (await api("/api/music")).tracks; } catch { state.music = []; }
-  return state.music;
-}
-function setupEditor(clip, video, dur) {
-  stopPreview();
-  const ed = $("#editor");
-  const prefs = { track: store.get("lh.edit.track", ""), offset: 0, music: store.get("lh.edit.music", 80), game: store.get("lh.edit.game", 100), fade: store.get("lh.edit.fade", true) };
+/* One editor for every change: trim range, background music, volumes.
+   Plain trims are lossless and may replace the original; music or volume
+   changes always make a new clip. */
+function buildEditor(clip, video, dur, drawTrim, drawTime) {
+  const player = $("#player"), ed = $("#editor");
+  const prefs = { track: store.get("lh.edit.track", ""), offset: 0, music: store.get("lh.edit.music", 80), game: 100, fade: store.get("lh.edit.fade", true), replace: false };
   let previewing = false;
+  const api_ = {};
+  const needsMix = () => !!prefs.track || prefs.game !== 100;
 
   const render = () => {
     const tracks = state.music || [];
@@ -1039,49 +1069,58 @@ function setupEditor(clip, video, dur) {
     const track = tracks.find(t => t.file === prefs.track);
     const maxOffset = Math.max(0, Math.floor((track && track.duration) || 0) - 1);
     prefs.offset = Math.min(prefs.offset, maxOffset);
-    const [a, b] = state.trim;
+    if (needsMix()) prefs.replace = false;
     ed.innerHTML = `
-      <h3>Edit</h3>
+      <div class="edhead"><h3>Edit clip</h3><span class="grow"></span><button id="eCancel" title="Close without saving (Esc)">Cancel</button></div>
+      <div class="set"><div class="l"><div>Trim</div><div class="h">Drag the gold handles on the timeline, or set them at the playhead.</div></div>
+        <div class="c"><span class="mono muted" id="eRange"></span>
+          <button id="eIn" title="Start at playhead (I)">Set start</button><button id="eOut" title="End at playhead (O)">Set end</button>
+          <button id="eSmart" ${clip.suggested_trim_start == null ? "disabled" : ""} title="${esc(clip.smart_trim_reason || "Smart trim")}">${icon("spark")}Smart trim</button>
+          <button id="eReset" title="Use the whole clip">Reset</button></div></div>
       ${row("Background music", "Your own audio file: MP3, M4A, WAV, FLAC or OGG.", `<select id="eTrack"><option value="">No music</option>${tracks.map(t => `<option value="${esc(t.file)}" ${t.file === prefs.track ? "selected" : ""}>${esc(t.name)}${t.duration ? " · " + mmss(t.duration) : ""}</option>`).join("")}</select>
         <button id="eAdd" title="Add a music file">${icon("upload")}Add music…</button>${track ? `<button class="ibtn" id="eRemove" title="Remove this track from the list">${icon("bin")}</button>` : ""}<input type="file" id="musicFile" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,audio/*">`)}
-      ${track ? row("Start song at", "Pick the part of the song that plays with the clip.", `<input type="range" id="eOffset" min="0" max="${maxOffset}" step="1" value="${prefs.offset}"><output class="mono muted" id="eOffsetOut">${mmss(prefs.offset)}</output>`) : ""}
+      ${track ? row("Start song at", "Which part of the song plays with the clip.", `<input type="range" id="eOffset" min="0" max="${maxOffset}" step="1" value="${prefs.offset}"><output class="mono muted">${mmss(prefs.offset)}</output>`) : ""}
       ${track ? row("Music volume", "", `<input type="range" id="eMusic" min="0" max="200" step="5" value="${prefs.music}"><output class="mono muted">${prefs.music}%</output>`) : ""}
       ${row("Game volume", track ? "Lower it so the music sits on top." : "", `<input type="range" id="eGame" min="0" max="200" step="5" value="${prefs.game}"><output class="mono muted">${prefs.game}%</output>`)}
       ${track ? row("Fade music in and out", "", `<input type="checkbox" id="eFade" ${prefs.fade ? "checked" : ""}>`) : ""}
       <div class="efoot">
-        <span class="mono muted">Range ${mmss(a)} – ${mmss(b)} · ${(b - a).toFixed(1)}s (set with the trim handles)</span><span class="grow"></span>
+        <span class="muted">Save as</span>
+        <label class="radio"><input type="radio" name="eMode" value="new" ${prefs.replace ? "" : "checked"}> New clip</label>
+        <label class="radio ${needsMix() ? "off" : ""}" title="${needsMix() ? "Music and volume changes are always saved as a new clip" : "Overwrite this clip with the trimmed version"}"><input type="radio" name="eMode" value="replace" ${prefs.replace ? "checked" : ""} ${needsMix() ? "disabled" : ""}> Replace original</label>
+        <span class="grow"></span>
         <button id="ePreview">${icon(previewing ? "stop" : "play")}${previewing ? "Stop" : "Preview"}</button>
-        <button class="primary" id="eExport">Export new clip</button>
+        <button class="primary" id="eSave">Save</button>
       </div>
-      <div class="hint">The original clip is kept. Tracks from streaming apps like Spotify can't be added; use music you own or royalty-free tracks.</div>`;
+      <div class="hint">${needsMix() ? "Music is mixed in; the video is copied without quality loss." : "Trims are lossless and snap to the nearest 2-second keyframe."} Spotify and other streaming tracks can't be added; use music you own or royalty-free tracks.</div>`;
     bind();
+    drawTrim();
   };
 
   const fadeGain = t => {
-    if (!prefs.fade) return 1;
+    if (!prefs.fade || !prefs.track) return 1;
     const len = state.trim[1] - state.trim[0];
-    return Math.max(0, Math.min(1, t / 1, (len - t) / 1.5));
+    return Math.max(0, Math.min(1, t, (len - t) / 1.5));
   };
   const sync = () => {
     if (!previewing) return;
     const t = video.currentTime - state.trim[0];
-    if (video.currentTime >= state.trim[1] - 0.05 || t < -0.5) { stop(); return; }
-    video.volume = Math.min(1, prefs.game / 100);
+    if (video.currentTime >= state.trim[1] - 0.05 || t < -0.5) { stopPreviewing(); return; }
+    video.volume = Math.min(1, store.get("lh.volume", 1) * prefs.game / 100);
     if (previewAudio) {
       previewAudio.volume = Math.min(1, prefs.music / 100) * fadeGain(t);
       const want = prefs.offset + Math.max(0, t);
       if (Math.abs(previewAudio.currentTime - want) > 0.25) previewAudio.currentTime = want;
     }
   };
-  const stop = () => {
+  const stopPreviewing = () => {
     previewing = false;
     video.pause();
     stopPreview();
     video.volume = store.get("lh.volume", 1);
     video.removeEventListener("timeupdate", sync);
-    render();
+    if (!ed.hidden) render();
   };
-  const start = () => {
+  const startPreviewing = () => {
     previewing = true;
     video.currentTime = state.trim[0];
     if (prefs.track) {
@@ -1095,17 +1134,27 @@ function setupEditor(clip, video, dur) {
     video.play().catch(() => {});
     render();
   };
-  const exportEdit = async () => {
-    const btn = $("#eExport"); btn.disabled = true; btn.textContent = "Exporting…";
+  const save = async () => {
+    const btn = $("#eSave");
+    const [a, b] = state.trim;
+    if (prefs.replace && !confirm("Replace the original clip with this trimmed version? This can't be undone.")) return;
+    if (previewing) stopPreviewing();
+    btn.disabled = true; btn.textContent = "Saving…";
     try {
-      const r = await api(`/api/clip/${encodeURIComponent(clip.file)}/edit`, {
-        start: state.trim[0], end: state.trim[1], music: prefs.track, music_offset: prefs.offset,
-        music_volume: prefs.music / 100, game_volume: prefs.game / 100, fade: prefs.fade,
-      });
-      toast("New clip saved");
+      let r;
+      if (needsMix()) {
+        r = await api(`/api/clip/${encodeURIComponent(clip.file)}/edit`, {
+          start: a, end: b, music: prefs.track, music_offset: prefs.offset,
+          music_volume: prefs.music / 100, game_volume: prefs.game / 100, fade: prefs.fade,
+        });
+      } else {
+        if (prefs.replace) { video.removeAttribute("src"); video.load(); }
+        r = await api(`/api/clip/${encodeURIComponent(clip.file)}/trim`, { start: a, end: b, replace: prefs.replace });
+      }
+      toast(prefs.replace ? "Clip trimmed" : "Saved as a new clip");
       state.clip = { file: r.file };
       await loadClips(); loadStorage();
-    } catch (e) { toast(e.message, false); btn.disabled = false; btn.textContent = "Export new clip"; }
+    } catch (e) { toast(e.message, false); btn.disabled = false; btn.textContent = "Save"; }
   };
   const upload = async file => {
     if (!file) return;
@@ -1121,7 +1170,12 @@ function setupEditor(clip, video, dur) {
     } catch (e) { toast(e.message, false); }
   };
   const bind = () => {
-    $("#eTrack").onchange = e => { prefs.track = e.target.value; prefs.offset = 0; store.set("lh.edit.track", prefs.track); if (previewing) stop(); else render(); };
+    $("#eCancel").onclick = () => api_.close();
+    $("#eIn").onclick = () => api_.setIn();
+    $("#eOut").onclick = () => api_.setOut();
+    $("#eSmart").onclick = () => { state.trim = [clip.suggested_trim_start, clip.suggested_trim_end]; video.currentTime = state.trim[0]; drawTrim(); drawTime(); toast(clip.smart_trim_reason || "Smart trim applied"); };
+    $("#eReset").onclick = () => { state.trim = [0, dur]; drawTrim(); };
+    $("#eTrack").onchange = e => { prefs.track = e.target.value; prefs.offset = 0; store.set("lh.edit.track", prefs.track); if (previewing) stopPreviewing(); else render(); };
     $("#eAdd").onclick = () => $("#musicFile").click();
     $("#musicFile").onchange = e => upload(e.target.files[0]);
     if ($("#eRemove")) $("#eRemove").onclick = async () => {
@@ -1129,27 +1183,39 @@ function setupEditor(clip, video, dur) {
       await api(`/api/music/${encodeURIComponent(prefs.track)}/delete`, {}).catch(e => toast(e.message, false));
       prefs.track = ""; store.set("lh.edit.track", ""); await loadMusic(); render();
     };
-    const slider = (id, key, fmt, save) => {
+    const slider = (id, key, fmt, persist, rerender) => {
       const el = $(id); if (!el) return;
-      el.oninput = () => { prefs[key] = +el.value; el.nextElementSibling.textContent = fmt(prefs[key]); if (save) store.set(save, prefs[key]); sync(); };
+      el.oninput = () => { prefs[key] = +el.value; el.nextElementSibling.textContent = fmt(prefs[key]); if (persist) store.set(persist, prefs[key]); sync(); };
+      if (rerender) el.onchange = () => { if (!previewing) render(); };
     };
     slider("#eOffset", "offset", mmss);
     slider("#eMusic", "music", v => v + "%", "lh.edit.music");
-    slider("#eGame", "game", v => v + "%", "lh.edit.game");
+    slider("#eGame", "game", v => v + "%", null, true);
     if ($("#eFade")) $("#eFade").onchange = e => { prefs.fade = e.target.checked; store.set("lh.edit.fade", prefs.fade); };
-    $("#ePreview").onclick = () => previewing ? stop() : start();
-    $("#eExport").onclick = exportEdit;
+    $$("input[name=eMode]").forEach(r => r.onchange = () => { prefs.replace = r.value === "replace" && r.checked; });
+    $("#ePreview").onclick = () => previewing ? stopPreviewing() : startPreviewing();
+    $("#eSave").onclick = save;
   };
 
-  const open = async () => {
-    ed.hidden = !ed.hidden;
-    if (!ed.hidden) { await loadMusic(); render(); ed.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
-    else if (previewing) stop();
+  api_.open = async () => {
+    player.classList.add("editing");
+    ed.hidden = false;
+    $("#bEdit").classList.add("on");
+    if (!state.music) await loadMusic();
+    render();
+    ed.scrollIntoView({ behavior: "smooth", block: "nearest" });
   };
-  $("#bEdit").onclick = open;
-  clipActions.edit = open;
-  // Keep the range line current while the trim handles move.
-  $("#scrub").addEventListener("pointerup", () => { if (!ed.hidden && !previewing) render(); });
+  api_.close = () => {
+    if (previewing) stopPreviewing();
+    player.classList.remove("editing");
+    ed.hidden = true;
+    $("#bEdit").classList.remove("on");
+    state.trim = [0, dur];
+    drawTrim();
+  };
+  api_.isOpen = () => !ed.hidden;
+  state.editor = api_;
+  return api_;
 }
 function stepClip(delta) {
   if (!state.game || !state.clip) return;
@@ -1318,6 +1384,7 @@ window.addEventListener("keydown", e => {
   const tag = (e.target.tagName || "").toLowerCase();
   if (["input", "select", "textarea"].includes(tag) || e.ctrlKey || e.altKey || e.metaKey) return;
   if (e.key === "Escape" && state.sel.size) { clearPicks(); return; }
+  if (e.key === "Escape" && state.editor && state.editor.isOpen()) { state.editor.close(); return; }
   if (e.key === "Escape" && !document.fullscreenElement && state.view !== "home") { show("home"); return; }
   if (state.view === "review" && state.review) {
     const k = e.key.toLowerCase();
