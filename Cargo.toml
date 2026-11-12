@@ -1,6 +1,6 @@
 ﻿[package]
 name = "league-highlights"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2021"
 description = "Lightweight League of Legends highlight recorder for Windows"
 publish = false
