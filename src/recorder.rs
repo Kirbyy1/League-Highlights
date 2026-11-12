@@ -254,8 +254,17 @@ impl Recorder {
         .iter()
         .map(|a| a.to_string())
         .collect();
+        // Hardware encoding needs no CPU worker pools: one thread per stage
+        // (51 -> 39 threads). CPU scaling and libx264 keep their defaults.
+        let filters = filter_args(s, window, encoder, backend);
+        if encoder != "libx264" {
+            args.extend(["-threads".into(), "1".into()]);
+            if filters.is_empty() {
+                args.extend(["-filter_threads".into(), "1".into()]);
+            }
+        }
         args.extend(capture_args(s, window, backend));
-        args.extend(filter_args(s, window, encoder, backend));
+        args.extend(filters);
         args.extend(["-fps_mode".into(), "cfr".into()]);
         args.extend(encoder_args(encoder, s.quality));
         args.extend(

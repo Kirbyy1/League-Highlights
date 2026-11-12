@@ -279,17 +279,20 @@ fn search_path(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// Encoder arguments, identical to the tuned Python presets.
+/// Encoder arguments. Hardware encoders run without B-frames: measured on
+/// NVENC, B-frames cost ~190 MB of private memory (extra reference and
+/// reorder surfaces) for ~12% smaller files, which is the wrong trade for a
+/// recorder that runs next to the game.
 pub fn encoder_args(encoder: &str, quality: u32) -> Vec<String> {
     let q = quality.to_string();
     let list: Vec<&str> = match encoder {
         "h264_nvenc" => vec![
             "-c:v", encoder, "-preset", "p4", "-tune", "hq", "-rc", "vbr", "-cq", &q, "-b:v", "0",
-            "-maxrate", "20M", "-bufsize", "40M",
+            "-maxrate", "20M", "-bufsize", "40M", "-bf", "0",
         ],
-        "h264_qsv" => vec!["-c:v", encoder, "-preset", "medium", "-global_quality", &q],
+        "h264_qsv" => vec!["-c:v", encoder, "-preset", "medium", "-global_quality", &q, "-bf", "0"],
         "h264_amf" => vec![
-            "-c:v", encoder, "-quality", "speed", "-rc", "cqp", "-qp_i", &q, "-qp_p", &q,
+            "-c:v", encoder, "-quality", "speed", "-rc", "cqp", "-qp_i", &q, "-qp_p", &q, "-bf", "0",
         ],
         _ => vec!["-c:v", "libx264", "-preset", "veryfast", "-crf", &q, "-sc_threshold", "0"],
     };
