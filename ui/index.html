@@ -193,6 +193,20 @@ body.selecting #selbar { display: flex; }
 .upd { width: 100%; justify-content: center; color: var(--accent); font-size: 12.5px; padding: 5px 8px; }
 .upd[hidden] { display: none; }
 
+/* ---------- clip editor (flat rows, like settings) ---------- */
+.editor { margin-top: 18px; padding-top: 6px; border-top: 1px solid var(--line); }
+.editor[hidden] { display: none; }
+.editor h3 { margin: 12px 0 4px; }
+.editor .set .c { gap: 10px; }
+.editor .set .c output { width: 52px; }
+.editor input[type=range] { width: 200px; }
+.editor select { max-width: 240px; }
+.editor .efoot { display: flex; align-items: center; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.editor .efoot .grow { flex: 1; }
+.editor .hint { color: var(--faint); font-size: 12px; margin-top: 10px; }
+.editor .efoot button:not(.primary) { border: 1px solid var(--line); color: var(--text); }
+#musicFile { display: none; }
+
 /* ---------- review ---------- */
 .rvhead { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
 .rvhead .muted { font-family: var(--mono); font-size: 12px; }
@@ -410,6 +424,9 @@ const P = {
   copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/>',
   send: '<path d="M20.5 3.5 10 14M20.5 3.5l-6.5 17-4-6.5-6.5-4z"/>',
   next: '<path d="m9 5 7 7-7 7"/>',
+  music: '<path d="M9 18V5.5l11-2V16"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
+  upload: '<path d="M12 16V4M7 9l5-5 5 5M4.5 15.5v3a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
   warn: '<path d="M12 7.5v6M12 17h.01"/>',
   x: '<path d="m7 7 10 10M17 7 7 17"/>',
   info: '<path d="M12 11v6M12 7h.01"/>',
@@ -446,6 +463,7 @@ function show(view) {
   $("#scroll").scrollTop = 0;
   if (view !== "match" && view !== "review") { state.game = null; renderMatches(); }
   if (view !== "review") state.review = null;
+  stopPreview();
   if (view === "settings") loadSettings();
   if (view === "status") renderStatus();
   if (view === "home") renderHome();
@@ -881,6 +899,7 @@ function selectClip(clip) {
       <div><div class="label">${esc(title(clip.label))}</div>
       <div class="sub">${esc(dateText(new Date(clip.created_at)))} · ${mmss(dur)} · ${size(clip.size_bytes)}${clip.highlight_score ? " · score " + clip.highlight_score : ""}</div></div>
       <div class="tools">
+        <button id="bEdit" title="Add background music and export (E)">${icon("music")}Edit</button>
         <button id="bCopy" title="Copy video — paste into Discord or a chat (Ctrl+C)">${icon("copy")}Copy</button>
         <button id="bDiscord" title="Make a copy under your Discord upload limit from the trimmed range">${icon("send")}Discord</button>
         <button class="ibtn ${clip.rating === "good" ? "on good" : ""}" id="rGood" title="Good clip (G)">${icon("up")}</button>
@@ -898,7 +917,8 @@ function selectClip(clip) {
       <span class="grow"></span>
       <label><input type="checkbox" id="tReplace"> Replace original</label>
       <button id="tSave" class="primary">Save trim</button>
-    </div>`;
+    </div>
+    <div class="editor" id="editor" hidden></div>`;
   const video = $("#video"), stage = $("#stage"), scrub = $("#scrub");
   video.volume = vol; video.muted = muted;
   const pct = t => (Math.max(0, Math.min(dur, t)) / Math.max(dur, .1) * 100) + "%";
@@ -996,8 +1016,141 @@ function selectClip(clip) {
     seek: d => { video.currentTime = Math.max(0, Math.min(dur, video.currentTime + d)); drawTime(); },
   };
   drawTrim(); drawTime();
+  setupEditor(clip, video, dur);
 }
 document.addEventListener("click", () => { const m = $("#menu"); if (m) m.classList.remove("on"); });
+
+/* ---------- clip editor: background music ---------- */
+let previewAudio = null;
+function stopPreview() { if (previewAudio) { previewAudio.pause(); previewAudio = null; } }
+async function loadMusic() {
+  try { state.music = (await api("/api/music")).tracks; } catch { state.music = []; }
+  return state.music;
+}
+function setupEditor(clip, video, dur) {
+  stopPreview();
+  const ed = $("#editor");
+  const prefs = { track: store.get("lh.edit.track", ""), offset: 0, music: store.get("lh.edit.music", 80), game: store.get("lh.edit.game", 100), fade: store.get("lh.edit.fade", true) };
+  let previewing = false;
+
+  const render = () => {
+    const tracks = state.music || [];
+    if (prefs.track && !tracks.some(t => t.file === prefs.track)) prefs.track = "";
+    const track = tracks.find(t => t.file === prefs.track);
+    const maxOffset = Math.max(0, Math.floor((track && track.duration) || 0) - 1);
+    prefs.offset = Math.min(prefs.offset, maxOffset);
+    const [a, b] = state.trim;
+    ed.innerHTML = `
+      <h3>Edit</h3>
+      ${row("Background music", "Your own audio file: MP3, M4A, WAV, FLAC or OGG.", `<select id="eTrack"><option value="">No music</option>${tracks.map(t => `<option value="${esc(t.file)}" ${t.file === prefs.track ? "selected" : ""}>${esc(t.name)}${t.duration ? " · " + mmss(t.duration) : ""}</option>`).join("")}</select>
+        <button id="eAdd" title="Add a music file">${icon("upload")}Add music…</button>${track ? `<button class="ibtn" id="eRemove" title="Remove this track from the list">${icon("bin")}</button>` : ""}<input type="file" id="musicFile" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,audio/*">`)}
+      ${track ? row("Start song at", "Pick the part of the song that plays with the clip.", `<input type="range" id="eOffset" min="0" max="${maxOffset}" step="1" value="${prefs.offset}"><output class="mono muted" id="eOffsetOut">${mmss(prefs.offset)}</output>`) : ""}
+      ${track ? row("Music volume", "", `<input type="range" id="eMusic" min="0" max="200" step="5" value="${prefs.music}"><output class="mono muted">${prefs.music}%</output>`) : ""}
+      ${row("Game volume", track ? "Lower it so the music sits on top." : "", `<input type="range" id="eGame" min="0" max="200" step="5" value="${prefs.game}"><output class="mono muted">${prefs.game}%</output>`)}
+      ${track ? row("Fade music in and out", "", `<input type="checkbox" id="eFade" ${prefs.fade ? "checked" : ""}>`) : ""}
+      <div class="efoot">
+        <span class="mono muted">Range ${mmss(a)} – ${mmss(b)} · ${(b - a).toFixed(1)}s (set with the trim handles)</span><span class="grow"></span>
+        <button id="ePreview">${icon(previewing ? "stop" : "play")}${previewing ? "Stop" : "Preview"}</button>
+        <button class="primary" id="eExport">Export new clip</button>
+      </div>
+      <div class="hint">The original clip is kept. Tracks from streaming apps like Spotify can't be added; use music you own or royalty-free tracks.</div>`;
+    bind();
+  };
+
+  const fadeGain = t => {
+    if (!prefs.fade) return 1;
+    const len = state.trim[1] - state.trim[0];
+    return Math.max(0, Math.min(1, t / 1, (len - t) / 1.5));
+  };
+  const sync = () => {
+    if (!previewing) return;
+    const t = video.currentTime - state.trim[0];
+    if (video.currentTime >= state.trim[1] - 0.05 || t < -0.5) { stop(); return; }
+    video.volume = Math.min(1, prefs.game / 100);
+    if (previewAudio) {
+      previewAudio.volume = Math.min(1, prefs.music / 100) * fadeGain(t);
+      const want = prefs.offset + Math.max(0, t);
+      if (Math.abs(previewAudio.currentTime - want) > 0.25) previewAudio.currentTime = want;
+    }
+  };
+  const stop = () => {
+    previewing = false;
+    video.pause();
+    stopPreview();
+    video.volume = store.get("lh.volume", 1);
+    video.removeEventListener("timeupdate", sync);
+    render();
+  };
+  const start = () => {
+    previewing = true;
+    video.currentTime = state.trim[0];
+    if (prefs.track) {
+      previewAudio = new Audio(`/music/${encodeURIComponent(prefs.track)}`);
+      previewAudio.loop = true;
+      previewAudio.currentTime = prefs.offset;
+      previewAudio.volume = 0;
+      previewAudio.play().catch(() => {});
+    }
+    video.addEventListener("timeupdate", sync);
+    video.play().catch(() => {});
+    render();
+  };
+  const exportEdit = async () => {
+    const btn = $("#eExport"); btn.disabled = true; btn.textContent = "Exporting…";
+    try {
+      const r = await api(`/api/clip/${encodeURIComponent(clip.file)}/edit`, {
+        start: state.trim[0], end: state.trim[1], music: prefs.track, music_offset: prefs.offset,
+        music_volume: prefs.music / 100, game_volume: prefs.game / 100, fade: prefs.fade,
+      });
+      toast("New clip saved");
+      state.clip = { file: r.file };
+      await loadClips(); loadStorage();
+    } catch (e) { toast(e.message, false); btn.disabled = false; btn.textContent = "Export new clip"; }
+  };
+  const upload = async file => {
+    if (!file) return;
+    if (file.size > 60 * 1024 * 1024) { toast("Music files can be up to 60 MB", false); return; }
+    toast(`Adding ${file.name}…`);
+    try {
+      const r = await fetch(`/api/music?name=${encodeURIComponent(file.name)}`, { method: "POST", headers: { "X-LH": "1", "Content-Type": "application/octet-stream" }, body: file });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || r.statusText);
+      await loadMusic();
+      prefs.track = data.file; prefs.offset = 0; store.set("lh.edit.track", prefs.track);
+      toast("Music added"); render();
+    } catch (e) { toast(e.message, false); }
+  };
+  const bind = () => {
+    $("#eTrack").onchange = e => { prefs.track = e.target.value; prefs.offset = 0; store.set("lh.edit.track", prefs.track); if (previewing) stop(); else render(); };
+    $("#eAdd").onclick = () => $("#musicFile").click();
+    $("#musicFile").onchange = e => upload(e.target.files[0]);
+    if ($("#eRemove")) $("#eRemove").onclick = async () => {
+      if (!confirm("Remove this track from your music list? The file is deleted from the app's music folder.")) return;
+      await api(`/api/music/${encodeURIComponent(prefs.track)}/delete`, {}).catch(e => toast(e.message, false));
+      prefs.track = ""; store.set("lh.edit.track", ""); await loadMusic(); render();
+    };
+    const slider = (id, key, fmt, save) => {
+      const el = $(id); if (!el) return;
+      el.oninput = () => { prefs[key] = +el.value; el.nextElementSibling.textContent = fmt(prefs[key]); if (save) store.set(save, prefs[key]); sync(); };
+    };
+    slider("#eOffset", "offset", mmss);
+    slider("#eMusic", "music", v => v + "%", "lh.edit.music");
+    slider("#eGame", "game", v => v + "%", "lh.edit.game");
+    if ($("#eFade")) $("#eFade").onchange = e => { prefs.fade = e.target.checked; store.set("lh.edit.fade", prefs.fade); };
+    $("#ePreview").onclick = () => previewing ? stop() : start();
+    $("#eExport").onclick = exportEdit;
+  };
+
+  const open = async () => {
+    ed.hidden = !ed.hidden;
+    if (!ed.hidden) { await loadMusic(); render(); ed.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+    else if (previewing) stop();
+  };
+  $("#bEdit").onclick = open;
+  clipActions.edit = open;
+  // Keep the range line current while the trim handles move.
+  $("#scrub").addEventListener("pointerup", () => { if (!ed.hidden && !previewing) render(); });
+}
 function stepClip(delta) {
   if (!state.game || !state.clip) return;
   const list = state.game.clips, i = list.findIndex(c => c.file === state.clip.file);
@@ -1184,6 +1337,7 @@ window.addEventListener("keydown", e => {
   else if (e.key === " ") { e.preventDefault(); clipActions.toggle(); }
   else if (k === "f") clipActions.fullscreen();
   else if (k === "c") clipActions.copy();
+  else if (k === "e" && clipActions.edit) clipActions.edit();
   else if (k === "m") clipActions.mute();
   else if (k === "i") clipActions.setIn();
   else if (k === "o") clipActions.setOut();

@@ -297,6 +297,52 @@ fn handle(ctx: &WebCtx, mut request: Request, port: u16, token: &str) {
             }
             json_response(&json!({"ok": true}))
         }
+        (Method::Get, ["api", "music"]) => {
+            let dir = ctx.paths.root.join("music");
+            json_response(&json!({ "tracks": crate::music::list(&dir, ctx.ff.as_deref()) }))
+        }
+        (Method::Post, ["api", "music"]) => {
+            let name = params.iter().find(|(k, _)| k == "name").map(|(_, v)| v.clone()).unwrap_or_default();
+            let mut bytes = Vec::new();
+            let _ = request.as_reader().take(crate::music::MAX_BYTES + 1).read_to_end(&mut bytes);
+            if bytes.len() as u64 > crate::music::MAX_BYTES {
+                error(413, "Music files can be up to 60 MB.")
+            } else {
+                match crate::music::save(&ctx.paths.root.join("music"), &name, &bytes, ctx.ff.as_deref()) {
+                    Ok(file) => json_response(&json!({ "ok": true, "file": file })),
+                    Err(e) => error(400, &e),
+                }
+            }
+        }
+        (Method::Post, ["api", "music", file, "delete"]) => {
+            let file = crate::util::percent_decode(file);
+            match crate::music::resolve(&ctx.paths.root.join("music"), &file) {
+                Some(path) => {
+                    let _ = std::fs::remove_file(path);
+                    json_response(&json!({ "ok": true }))
+                }
+                None => error(404, "Track not found"),
+            }
+        }
+        (Method::Get, ["music", file]) => {
+            let file = crate::util::percent_decode(file);
+            match crate::music::resolve(&ctx.paths.root.join("music"), &file) {
+                Some(path) => {
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                    let ctype = match ext.as_str() {
+                        "mp3" => "audio/mpeg",
+                        "m4a" | "aac" => "audio/mp4",
+                        "wav" => "audio/wav",
+                        "flac" => "audio/flac",
+                        "ogg" | "opus" => "audio/ogg",
+                        _ => "application/octet-stream",
+                    };
+                    serve_file(request, &path, ctype);
+                    return;
+                }
+                None => error(404, "Track not found"),
+            }
+        }
         (Method::Get, ["api", "setup"]) => {
             let settings = ctx.cfg.read().unwrap().clone();
             let checks = crate::setup::run(&settings, ctx.ff.as_deref());
@@ -379,6 +425,24 @@ fn clip_action(ctx: &WebCtx, clip: &Path, action: &str, body: &Value) -> Result<
         "copy" => {
             win::copy_files_to_clipboard(&[clip.to_path_buf()])?;
             Ok(json!({"ok": true}))
+        }
+        "edit" => {
+            let ff = ctx.ff.as_ref().ok_or("FFmpeg is missing")?;
+            let music = match body["music"].as_str().filter(|m| !m.is_empty()) {
+                Some(file) => Some(crate::music::resolve(&ctx.paths.root.join("music"), file).ok_or("Music track not found")?),
+                None => None,
+            };
+            let options = crate::edit::EditOptions {
+                start: body["start"].as_f64().unwrap_or(0.0),
+                end: body["end"].as_f64().ok_or("Missing end")?,
+                music,
+                music_offset: body["music_offset"].as_f64().unwrap_or(0.0),
+                music_volume: body["music_volume"].as_f64().unwrap_or(0.8),
+                game_volume: body["game_volume"].as_f64().unwrap_or(1.0),
+                fade: body["fade"].as_bool().unwrap_or(true),
+            };
+            let file = crate::edit::render(ff, clip, &options)?;
+            Ok(json!({ "ok": true, "file": file }))
         }
         "discord" => {
             let ff = ctx.ff.as_ref().ok_or("FFmpeg is missing")?;

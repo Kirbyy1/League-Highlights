@@ -196,6 +196,30 @@ impl Ffmpeg {
         }
     }
 
+    /// FFmpeg's stream summary for a file (`ffmpeg -i`), without ffprobe.
+    pub fn probe(&self, path: &Path) -> Option<String> {
+        let mut child = self
+            .command(false)
+            .args(["-hide_banner", "-i"])
+            .arg(path)
+            .stderr(Stdio::piped())
+            .spawn()
+            .ok()?;
+        crate::win::adopt_child(&child);
+        let mut text = String::new();
+        let _ = child.stderr.take()?.read_to_string(&mut text);
+        let _ = child.wait();
+        Some(text)
+    }
+
+    pub fn probe_duration(&self, path: &Path) -> Option<f64> {
+        parse_duration(&self.probe(path)?)
+    }
+
+    pub fn has_audio(&self, path: &Path) -> bool {
+        self.probe(path).is_some_and(|t| t.contains("Audio:"))
+    }
+
     fn capture(&self, args: &[&str], timeout: Duration) -> Option<String> {
         let mut child = self
             .command(false)
@@ -220,6 +244,27 @@ impl Ffmpeg {
             std::thread::sleep(Duration::from_millis(40));
         }
         reader.join().ok()
+    }
+}
+
+/// `Duration: 00:03:21.45,` -> 201.45
+fn parse_duration(text: &str) -> Option<f64> {
+    let rest = text.split("Duration: ").nth(1)?;
+    let stamp = rest.split(',').next()?.trim();
+    let mut parts = stamp.split(':');
+    let h: f64 = parts.next()?.parse().ok()?;
+    let m: f64 = parts.next()?.parse().ok()?;
+    let s: f64 = parts.next()?.parse().ok()?;
+    Some(h * 3600.0 + m * 60.0 + s)
+}
+
+#[cfg(test)]
+mod probe_tests {
+    #[test]
+    fn parses_ffmpeg_duration() {
+        let text = "Input #0, mp3, from 'x.mp3':\n  Duration: 00:03:21.45, start: 0.025, bitrate: 320 kb/s\n";
+        assert_eq!(super::parse_duration(text), Some(201.45));
+        assert_eq!(super::parse_duration("Duration: N/A, bitrate: N/A"), None);
     }
 }
 
