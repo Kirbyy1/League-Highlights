@@ -143,6 +143,10 @@ pub fn finalize_match(dir: &Path, ctx: &MatchContext, result: &str) {
     log::info!("Finalized game group {} with {changed} clip(s)", ctx.match_id);
 }
 
+/// Bumped when clip metadata changes in the background, so an open library
+/// window knows to reload (for example a result filled in from match history).
+pub static CHANGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Clip groups whose result is unknown: (match id, start, duration), one each.
 pub fn unknown_results(dir: &Path) -> Vec<(String, f64, f64)> {
     let mut out: Vec<(String, f64, f64)> = Vec::new();
@@ -183,6 +187,9 @@ pub fn set_match_result(dir: &Path, match_id: &str, result: &str) -> usize {
                 changed += 1;
             }
         }
+    }
+    if changed > 0 {
+        CHANGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     changed
 }

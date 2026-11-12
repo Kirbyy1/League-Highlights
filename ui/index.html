@@ -542,6 +542,11 @@ async function pollStatus() {
       state.lastClip = st.last_clip;
       if (!first) { toast("Highlight saved"); loadClips(); }
     }
+    if (s.library_changes !== state.libraryChanges) {
+      const first = state.libraryChanges === undefined;
+      state.libraryChanges = s.library_changes;
+      if (!first) loadClips();
+    }
     if (state.view === "status") renderStatus();
   } catch (e) {
     $("#state").textContent = "Disconnected"; $("#statusDetail").textContent = "League Highlights is not running."; $("#dot").className = "dot warn";

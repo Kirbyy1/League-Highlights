@@ -128,7 +128,7 @@ impl Controller {
 
     pub fn run(mut self, rx: Receiver<Cmd>) {
         // Matches saved without a result (older versions, or a missed GameEnd).
-        lcu::fill_unknown_results_later(self.cfg.read().unwrap().clip_dir());
+        lcu::watch_unknown_results(self.cfg.clone());
         if self.ff.is_none() {
             self.set_state(
                 "ERROR",

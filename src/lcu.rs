@@ -7,9 +7,11 @@
 
 use std::path::{Path, PathBuf};
 
+use std::collections::HashMap;
+
 use serde_json::Value;
 
-use crate::config::Settings;
+use crate::config::{Settings, SharedSettings};
 use crate::util::base64;
 
 const RANKED_SOLO: [i64; 1] = [420];
@@ -98,25 +100,47 @@ pub struct PastGame {
 /// the client adds a game to its history shortly after the end-of-game screen.
 pub fn fill_unknown_results_later(dir: PathBuf) {
     let _ = std::thread::Builder::new().name("match-results".into()).spawn(move || {
-        let mut builder = ureq::AgentBuilder::new()
-            .timeout_connect(std::time::Duration::from_millis(400))
-            .timeout(std::time::Duration::from_secs(10));
-        if let Ok(tls) = native_tls::TlsConnector::builder()
-            .danger_accept_invalid_certs(true)
-            .danger_accept_invalid_hostnames(true)
-            .build()
-        {
-            builder = builder.tls_connector(std::sync::Arc::new(tls));
-        }
-        let agent = builder.build();
+        let agent = history_agent();
         for wait in [3, 20, 30, 60, 60, 120] {
             std::thread::sleep(std::time::Duration::from_secs(wait));
-            fill_unknown_results(&agent, &dir);
+            fill_unknown_results(&agent, &dir, &mut HashMap::new());
             if crate::library::unknown_results(&dir).is_empty() {
                 break;
             }
         }
     });
+}
+
+/// Check once a minute, while the League Client is open, for matches saved
+/// without a result (older versions, or a game closed before its result
+/// arrived). A match that is not in the recent history is given up on after
+/// a few tries. Nothing is read while the client is closed.
+pub fn watch_unknown_results(cfg: SharedSettings) {
+    let _ = std::thread::Builder::new().name("match-results-watch".into()).spawn(move || {
+        let agent = history_agent();
+        let mut misses: HashMap<String, u32> = HashMap::new();
+        loop {
+            if credentials().is_some() {
+                let dir = cfg.read().unwrap().clip_dir();
+                fill_unknown_results(&agent, &dir, &mut misses);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+    });
+}
+
+fn history_agent() -> ureq::Agent {
+    let mut builder = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_millis(400))
+        .timeout(std::time::Duration::from_secs(10));
+    if let Ok(tls) = native_tls::TlsConnector::builder()
+        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_hostnames(true)
+        .build()
+    {
+        builder = builder.tls_connector(std::sync::Arc::new(tls));
+    }
+    builder.build()
 }
 
 /// The current player's most recent games, newest first.
@@ -150,20 +174,26 @@ pub fn find_game(games: &[PastGame], started: f64, duration: f64) -> Option<&Pas
 /// Fill in Win or Loss for clip groups saved with an unknown result, from the
 /// League Client's match history. Returns how many groups were updated, or
 /// None when the client could not be reached.
-pub fn fill_unknown_results(agent: &ureq::Agent, dir: &Path) -> Option<usize> {
-    let unknown = crate::library::unknown_results(dir);
+pub fn fill_unknown_results(agent: &ureq::Agent, dir: &Path, misses: &mut HashMap<String, u32>) -> Option<usize> {
+    let unknown: Vec<_> = crate::library::unknown_results(dir)
+        .into_iter()
+        .filter(|(id, ..)| misses.get(id).copied().unwrap_or(0) < 5)
+        .collect();
     if unknown.is_empty() {
         return Some(0);
     }
     let games = recent_games(agent, 20)?;
     let mut updated = 0;
     for (match_id, started, duration) in unknown {
-        if let Some(game) = find_game(&games, started, duration) {
-            let result = if game.win { "WIN" } else { "LOSE" };
-            if crate::library::set_match_result(dir, &match_id, result) > 0 {
-                log::info!("Match result from the League Client: {match_id} ({result})");
-                updated += 1;
+        match find_game(&games, started, duration) {
+            Some(game) => {
+                let result = if game.win { "WIN" } else { "LOSE" };
+                if crate::library::set_match_result(dir, &match_id, result) > 0 {
+                    log::info!("Match result from the League Client: {match_id} ({result})");
+                    updated += 1;
+                }
             }
+            None => *misses.entry(match_id).or_insert(0) += 1,
         }
     }
     Some(updated)
