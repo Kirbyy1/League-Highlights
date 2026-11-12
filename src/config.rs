@@ -103,6 +103,10 @@ pub struct Settings {
     pub auto_clip_pentakill: bool,
     pub auto_clip_dragon: bool,
     pub auto_clip_baron: bool,
+    /// Rift Herald, Voidgrub and Atakhan steals.
+    pub auto_clip_other_steals: bool,
+    /// The final seconds of a win.
+    pub auto_clip_victory: bool,
 
     pub smart_highlights_enabled: bool,
     pub smart_sensitivity: String,
@@ -156,6 +160,8 @@ impl Default for Settings {
             auto_clip_pentakill: true,
             auto_clip_dragon: true,
             auto_clip_baron: true,
+            auto_clip_other_steals: true,
+            auto_clip_victory: true,
             smart_highlights_enabled: true,
             smart_sensitivity: "balanced".into(),
             hotkey_vk: 0x77,

@@ -61,7 +61,7 @@ pub fn list(dir: &Path, ff: Option<&Ffmpeg>) -> Vec<Track> {
             name,
         });
     }
-    tracks.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    tracks.sort_by_key(|a| a.name.to_lowercase());
     tracks
 }
 
@@ -82,7 +82,7 @@ pub fn save(dir: &Path, name: &str, bytes: &[u8], ff: Option<&Ffmpeg>) -> Result
     }
     let temp = path.with_extension(format!("{ext}.part"));
     fs::write(&temp, bytes).map_err(|e| e.to_string())?;
-    let readable = ff.map_or(true, |f| f.probe_duration(&temp).is_some_and(|d| d > 0.5));
+    let readable = ff.is_none_or(|f| f.probe_duration(&temp).is_some_and(|d| d > 0.5));
     if !readable {
         let _ = fs::remove_file(&temp);
         return Err("That file doesn't contain audio FFmpeg can read.".into());

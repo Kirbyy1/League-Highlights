@@ -14,6 +14,7 @@ mod exporter;
 mod ffmpeg;
 mod hotkey;
 mod lcu;
+mod learn;
 mod library;
 mod live;
 mod logger;
@@ -108,7 +109,7 @@ fn main() {
 
     hotkey::start(tx.clone());
 
-    let detector = live::Detector::new(cfg.clone(), tx.clone(), tracker.clone(), live.clone());
+    let detector = live::Detector::new(paths.root.clone(), cfg.clone(), tx.clone(), tracker.clone(), live.clone());
     let _ = std::thread::Builder::new().name("live-events".into()).spawn(move || detector.run());
 
     if let (Some(ff), Some(recorder)) = (ff.clone(), recorder.clone()) {

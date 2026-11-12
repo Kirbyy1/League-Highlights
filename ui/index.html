@@ -475,7 +475,7 @@ function toast(text, ok = true) {
 
 const EVENT_COLORS = {
   CHAMPION_KILL: "#e84057", MULTIKILL: "#f0904a", ASSIST: "#5aa6e8", PLAYER_DEATH: "#8a8a86",
-  ACE: "#e8c34a", DRAGON: "#a58bd6", DRAGON_STEAL: "#c4a6f5", BARON: "#9b6be0", BARON_STEAL: "#b98cff", MANUAL_TRIGGER: "#c8aa6e",
+  ACE: "#e8c34a", DRAGON: "#a58bd6", DRAGON_STEAL: "#c4a6f5", BARON: "#9b6be0", BARON_STEAL: "#b98cff", MANUAL_TRIGGER: "#c8aa6e", OBJECTIVE_STEAL: "#b98cff", VICTORY: "#0ac8b9",
 };
 const state = { games: [], clips: [], game: null, clip: null, view: "home", lastClip: null, settings: null, devices: null, trim: [0, 0], result: "", hotkey: "F8", sel: new Set(), review: null, storage: null };
 
@@ -853,10 +853,10 @@ async function reviewAct(kind) {
   try {
     if (kind === "delete") {
       const v = $("#video"); if (v) { v.removeAttribute("src"); v.load(); }
-      await api(`/api/clip/${f}/delete`, {});
+      await api(`/api/clip/${f}/delete`, { source: "review" });
     } else if (kind !== "skip") {
       if (kind === "good") await api(`/api/clip/${f}/rate`, { rating: "good" });
-      await api(`/api/clip/${f}/reviewed`, { reviewed: true });
+      await api(`/api/clip/${f}/reviewed`, { reviewed: true, source: kind === "keep" ? "review" : "" });
     }
     if (kind !== "skip") { r.done++; clip.reviewed = true; }
   } catch (e) { toast(e.message, false); return; }
@@ -1280,7 +1280,11 @@ function renderSettings() {
       ${row("Quadra kills", "", check("auto_clip_quadra_kill", s))}
       ${row("Pentakills", "", check("auto_clip_pentakill", s))}
       ${row("Dragon steals", "", check("auto_clip_dragon", s))}
-      ${row("Baron steals", "", check("auto_clip_baron", s))}`],
+      ${row("Baron steals", "", check("auto_clip_baron", s))}
+      ${row("Herald, Voidgrub and Atakhan steals", "", check("auto_clip_other_steals", s))}
+      ${row("Winning moment", "Saves the last seconds before the Nexus falls when you win.", check("auto_clip_victory", s))}
+      <div class="set"><div class="l"><div>What Smart Highlights learned</div><div class="h" id="learned">Rate clips or use post-match review to teach it what you like.</div></div>
+        <div class="c"><button id="learnReset" class="outline">Reset</button></div></div>`],
     ["Shortcut", `
       ${row("Save clip shortcut", "Works while League is focused; the key still reaches the game.", `<kbd>${esc(s.hotkey_display)}</kbd><button id="hkBtn">Change</button>`)}`],
     ["App", `
@@ -1307,6 +1311,18 @@ function renderSettings() {
     });
   });
   $("#hkBtn").onclick = captureHotkey;
+  api("/api/learning").then(l => {
+    const fmt = list => list.map(([k, v]) => `${esc(k)} (${v > 0 ? "+" : ""}${v})`).join(", ");
+    const parts = [];
+    if (l.likes.length) parts.push(`Keeps more: ${fmt(l.likes)}`);
+    if (l.dislikes.length) parts.push(`Keeps fewer: ${fmt(l.dislikes)}`);
+    if (parts.length && $("#learned")) $("#learned").innerHTML = parts.join("<br>");
+  }).catch(() => {});
+  $("#learnReset").onclick = async () => {
+    if (!confirm("Forget what Smart Highlights learned from your ratings and reviews? Your clips and ratings stay.")) return;
+    await api("/api/learning/reset", {});
+    toast("Learning reset"); renderSettings();
+  };
 }
 async function saveSetting(el) {
   const k = el.dataset.k;

@@ -20,6 +20,7 @@ use crate::config::SharedSettings;
 use crate::models::{Cmd, EventTracker, HighlightRequest, MatchContext};
 use crate::scoring::{score_candidate, FeedbackProfile, PlayCandidate};
 use crate::util::{local_time, normalise_name, now, slug};
+use std::path::PathBuf;
 
 const BASE: &str = "https://127.0.0.1:2999/liveclientdata";
 
@@ -177,6 +178,9 @@ struct KillRecord {
     victim_level: i64,
     assisters: Vec<String>,
     solo: bool,
+    /// The victim's kill streak before this death (shutdown value).
+    victim_streak: i64,
+    first_blood: bool,
 }
 
 struct AssistRecord {
@@ -236,10 +240,22 @@ pub struct Detector {
     pending: Vec<HighlightRequest>,
     pending_deadline: Option<Instant>,
     recent: VecDeque<Recent>,
+
+    /// Kills since last death, per player (normalised name): shutdowns.
+    streaks: HashMap<String, i64>,
+    first_blood_pending: Option<Instant>,
+    /// Automatic clips saved this match (noise budget).
+    match_clips: u32,
+    /// Wall time where the last automatic clip ends.
+    last_auto_end: f64,
+    data_root: PathBuf,
+    learned: HashMap<String, crate::learn::Weight>,
+    learned_refresh: Option<Instant>,
 }
 
 impl Detector {
     pub fn new(
+        data_root: PathBuf,
         cfg: SharedSettings,
         tx: Sender<Cmd>,
         tracker: Arc<EventTracker>,
@@ -276,6 +292,13 @@ impl Detector {
             pending: Vec::new(),
             pending_deadline: None,
             recent: VecDeque::new(),
+            streaks: HashMap::new(),
+            first_blood_pending: None,
+            match_clips: 0,
+            last_auto_end: 0.0,
+            data_root,
+            learned: HashMap::new(),
+            learned_refresh: None,
         }
     }
 
@@ -454,6 +477,10 @@ impl Detector {
             self.clear_kills();
             self.clear_assists();
             self.snapshots.clear();
+            self.streaks.clear();
+            self.first_blood_pending = None;
+            self.match_clips = 0;
+            self.last_auto_end = 0.0;
             log::info!("Match session started: {match_id}");
             if let Some(ctx) = &self.current {
                 let _ = self.tx.send(Cmd::MatchStarted(ctx.clone()));
@@ -516,6 +543,11 @@ impl Detector {
         indexed.sort_by_key(|(id, _)| *id);
         let maximum = indexed.last().map(|(id, _)| *id).unwrap_or(0);
         let Some(last) = self.last_event_id else {
+            for (_, event) in &indexed {
+                if text(field(event, "EventName")).eq_ignore_ascii_case("ChampionKill") {
+                    self.update_streaks(event);
+                }
+            }
             self.last_event_id = Some(maximum);
             log::info!("Live event baseline established at EventID {maximum}");
             return;
@@ -542,11 +574,12 @@ impl Detector {
             return;
         }
         self.track(&name, event);
-        let (smart, dragon_on, baron_on) = {
+        let victim_streak = if name == "championkill" { self.update_streaks(event) } else { 0 };
+        let (smart, dragon_on, baron_on, other_on, victory_on) = {
             let c = self.cfg.read().unwrap();
-            (c.smart_highlights_enabled, c.auto_clip_dragon, c.auto_clip_baron)
+            (c.smart_highlights_enabled, c.auto_clip_dragon, c.auto_clip_baron, c.auto_clip_other_steals, c.auto_clip_victory)
         };
-        if !smart && matches!(name.as_str(), "championkill" | "multikill" | "ace" | "dragonkill" | "baronkill") {
+        if !smart && (matches!(name.as_str(), "championkill" | "multikill" | "ace" | "firstblood") || name.ends_with("kill")) {
             if name == "championkill" || name == "multikill" {
                 self.clear_kills();
                 self.clear_assists();
@@ -578,6 +611,8 @@ impl Detector {
                 victim_level: victim.level,
                 solo: assisters.is_empty(),
                 assisters,
+                victim_streak,
+                first_blood: self.first_blood_pending.take().is_some_and(|t| t.elapsed() < Duration::from_secs(5)),
             });
             self.last_kill_at = Some(Instant::now());
             self.last_kill_game_time = game_time;
@@ -630,8 +665,19 @@ impl Detector {
         }
         match name.as_str() {
             "ace" => self.last_ace_wall = now(),
+            "firstblood" if self.is_active(field(event, "Recipient")) => {
+                // Usually arrives right after the kill; otherwise mark the next one.
+                match self.kills.last_mut() {
+                    Some(kill) => kill.first_blood = true,
+                    None => self.first_blood_pending = Some(Instant::now()),
+                }
+            }
             "dragonkill" if dragon_on && self.belongs_to_active_team(event) => self.emit_objective(event, "dragon"),
             "baronkill" if baron_on && self.belongs_to_active_team(event) => self.emit_objective(event, "baron"),
+            // Rift Herald, Voidgrubs, Atakhan and any future epic monster.
+            other if other.ends_with("kill") && other != "dragonkill" && other != "baronkill" && other_on && self.belongs_to_active_team(event) => {
+                self.emit_objective(event, "objective")
+            }
             "gameend" => {
                 self.flush_kills(true);
                 self.flush_assists(true);
@@ -641,6 +687,9 @@ impl Detector {
                 }
                 let result = if result.is_empty() { "UNKNOWN".into() } else { result.to_uppercase() };
                 self.end_match(&result);
+                if result.starts_with("WIN") && victory_on && smart {
+                    self.emit_victory(event);
+                }
             }
             _ => {}
         }
@@ -671,6 +720,7 @@ impl Detector {
             "baronkill" if self.belongs_to_active_team(event) => {
                 if as_bool(field(event, "Stolen")) { "BARON_STEAL" } else { "BARON" }
             }
+            other if other.ends_with("kill") && as_bool(field(event, "Stolen")) && self.belongs_to_active_team(event) => "OBJECTIVE_STEAL",
             _ => "",
         };
         if !event_type.is_empty() {
@@ -685,10 +735,17 @@ impl Detector {
             return;
         }
         let elder = kind == "dragon" && normalise_name(&text(field(event, "DragonType"))) == "elder";
+        let monster = text(field(event, "EventName")).to_lowercase();
         let label = match (kind, elder) {
             ("dragon", true) => "ELDER DRAGON STEAL",
             ("dragon", false) => "DRAGON STEAL",
-            _ => "BARON STEAL",
+            ("baron", _) => "BARON STEAL",
+            _ => match monster.as_str() {
+                "heraldkill" => "RIFT HERALD STEAL",
+                "hordekill" => "VOIDGRUB STEAL",
+                "atakhankill" => "ATAKHAN STEAL",
+                _ => "OBJECTIVE STEAL",
+            },
         };
         let candidate = PlayCandidate { kind, stolen: true, elder, ..Default::default() };
         let Some(result) = self.score(&candidate, kind, label) else { return };
@@ -717,8 +774,27 @@ impl Detector {
             (cfg.smart_highlights_enabled, cfg.smart_sensitivity.clone(), cfg.clip_dir())
         };
         self.feedback.set_dir(clip_dir);
-        let adjust = self.feedback.adjustment(kind, label);
-        let result = score_candidate(c, enabled, &sensitivity, adjust);
+        // After 6 automatic clips in one game, routine plays need more.
+        let budget = if self.match_clips >= 6 { (6 * (self.match_clips as i64 - 5)).min(30) } else { 0 };
+        let adjust = self.feedback.adjustment(kind, label) + budget;
+        let mut result = score_candidate(c, enabled, &sensitivity, adjust);
+        if self.learned_refresh.is_none_or(|t| t.elapsed() > Duration::from_secs(15)) {
+            self.learned = crate::learn::load(&self.data_root);
+            self.learned_refresh = Some(Instant::now());
+        }
+        let learned = crate::learn::bonus(&self.learned, &result.reasons);
+        if learned != 0 {
+            result.score = (result.score + learned).max(0);
+            result.reasons.push(format!("your ratings {learned:+}"));
+            if enabled && !result.keep && result.score >= result.threshold {
+                result.keep = true;
+            } else if enabled && result.keep && result.score < result.threshold && learned < 0 && c.kill_count < 3 && !c.stolen {
+                result.keep = false;
+            }
+        }
+        if budget > 0 && !result.keep {
+            log::info!("Match already has {} automatic clips; skipping routine play", self.match_clips);
+        }
         if !result.keep {
             log::info!(
                 "Smart filter skipped {label} (score {}, threshold {}): {}",
@@ -794,9 +870,15 @@ impl Detector {
         let outnumbered = if count >= 2 && solo_kills == count { count } else { 0 };
         let ace = first_wall <= self.last_ace_wall && self.last_ace_wall <= last_wall + 6.0;
 
+        let victim_streak = records.iter().map(|r| r.victim_streak).max().unwrap_or(0);
+        let first_blood = records.iter().any(|r| r.first_blood);
         let mut label = KILL_LABELS[(count - 1) as usize].to_string();
         if count == 2 && solo_kills == 2 {
             label = "2V1 DOUBLE KILL".into();
+        } else if count == 1 && first_blood {
+            label = "FIRST BLOOD".into();
+        } else if count == 1 && victim_streak >= 3 {
+            label = "SHUTDOWN".into();
         }
         let candidate = PlayCandidate {
             kind: "kill",
@@ -809,6 +891,8 @@ impl Detector {
             died_after,
             ace,
             action_seconds: (last_wall - first_wall).max(0.0),
+            victim_streak,
+            first_blood,
             ..Default::default()
         };
         let Some(result) = self.score(&candidate, "kill", &label) else { return };
@@ -939,6 +1023,47 @@ impl Detector {
         self.collect(request);
     }
 
+    /// Update kill streaks for a ChampionKill and return the victim's
+    /// streak before this death (3+ means a shutdown).
+    fn update_streaks(&mut self, event: &Value) -> i64 {
+        let key = |v: &Value| normalise_name(&text(v));
+        let victim = key(field(event, "VictimName"));
+        let killer = key(field(event, "KillerName"));
+        let previous = self.streaks.remove(&victim).unwrap_or(0);
+        if !killer.is_empty() && killer != victim {
+            *self.streaks.entry(killer).or_insert(0) += 1;
+        }
+        previous
+    }
+
+    /// When you win: the final seconds before the Nexus falls, unless the
+    /// last automatic clip already covers them.
+    fn emit_victory(&mut self, event: &Value) {
+        let wall = now();
+        if wall - self.last_auto_end < 15.0 {
+            log::info!("Victory moment already covered by the last fight clip");
+            return;
+        }
+        let candidate = PlayCandidate { kind: "victory", ..Default::default() };
+        let Some(result) = self.score(&candidate, "victory", "VICTORY") else { return };
+        let request = HighlightRequest {
+            label: "VICTORY".into(),
+            event_started_at: Some(wall - 1.0),
+            event_ended_at: Some(wall),
+            pre_seconds: 18.0,
+            post_seconds: 4.0,
+            event_game_time: Some(event_time(event)),
+            event_kind: "victory".into(),
+            automatic: true,
+            highlight_score: result.score,
+            score_reasons: result.reasons,
+            ..self.request_base()
+        };
+        log::info!("Saving the winning moment");
+        self.tracker.record("VICTORY", event_time(event), &self.match_id(), wall);
+        self.emit(request);
+    }
+
     fn clear_kills(&mut self) {
         self.kills.clear();
         self.multikill_streak = 0;
@@ -1035,7 +1160,7 @@ impl Detector {
     // -----------------------------------------------------------------------
 
     fn collect(&mut self, request: HighlightRequest) {
-        let groupable = matches!(request.event_kind.as_str(), "kill" | "assist" | "dragon" | "baron" | "fight");
+        let groupable = matches!(request.event_kind.as_str(), "kill" | "assist" | "dragon" | "baron" | "objective" | "fight");
         if !request.automatic || !groupable || request.precise_window().is_none() {
             self.emit(request);
             return;
@@ -1081,7 +1206,13 @@ impl Detector {
         }
     }
 
-    fn emit(&self, request: HighlightRequest) {
+    fn emit(&mut self, request: HighlightRequest) {
+        if request.automatic {
+            self.match_clips += 1;
+            if let Some((_, end)) = request.desired_window() {
+                self.last_auto_end = self.last_auto_end.max(end);
+            }
+        }
         let _ = self.tx.send(Cmd::Highlight(request));
     }
 
@@ -1159,7 +1290,7 @@ fn unique(values: impl IntoIterator<Item = String>) -> Vec<String> {
 
 pub fn label_priority(label: &str) -> i64 {
     let upper = label.to_uppercase();
-    const PRIORITIES: [(&str, i64); 13] = [
+    const PRIORITIES: [(&str, i64); 20] = [
         ("PENTAKILL", 100),
         ("QUADRA", 90),
         ("TRIPLE", 80),
@@ -1167,7 +1298,14 @@ pub fn label_priority(label: &str) -> i64 {
         ("DOUBLE", 70),
         ("ELDER", 68),
         ("BARON STEAL", 66),
+        ("ATAKHAN STEAL", 66),
         ("DRAGON STEAL", 64),
+        ("HERALD STEAL", 62),
+        ("VOIDGRUB STEAL", 52),
+        ("OBJECTIVE STEAL", 50),
+        ("SHUTDOWN", 42),
+        ("FIRST BLOOD", 40),
+        ("VICTORY", 30),
         ("ACE", 60),
         ("LOW-HEALTH", 58),
         ("TEAMFIGHT", 55),
@@ -1178,6 +1316,22 @@ pub fn label_priority(label: &str) -> i64 {
         .iter()
         .find(|(marker, _)| upper.contains(marker))
         .map_or(10, |(_, v)| *v)
+}
+
+fn steal_name(joined: &str) -> &'static str {
+    for (marker, name) in [
+        ("ELDER", "ELDER STEAL"),
+        ("BARON", "BARON STEAL"),
+        ("ATAKHAN", "ATAKHAN STEAL"),
+        ("HERALD", "HERALD STEAL"),
+        ("VOIDGRUB", "VOIDGRUB STEAL"),
+        ("DRAGON", "DRAGON STEAL"),
+    ] {
+        if joined.contains(marker) {
+            return name;
+        }
+    }
+    "OBJECTIVE STEAL"
 }
 
 /// Merge related candidates into one clip request (Smart Highlights V2).
@@ -1200,7 +1354,7 @@ pub fn merge_requests(requests: Vec<HighlightRequest>, buffer_seconds: f64) -> H
     let duration = (event_end - event_start).max(0.0);
     let kinds: HashSet<String> = valid.iter().map(|r| r.event_kind.to_lowercase()).collect();
     let combat = kinds.iter().any(|k| matches!(k.as_str(), "kill" | "assist" | "fight"));
-    let objective = kinds.iter().any(|k| matches!(k.as_str(), "dragon" | "baron"));
+    let objective = kinds.iter().any(|k| matches!(k.as_str(), "dragon" | "baron" | "objective"));
 
     let mut reasons = unique(valid.iter().flat_map(|r| r.score_reasons.iter().cloned()));
     let mut score = valid.iter().map(|r| r.highlight_score).max().unwrap_or(0);
@@ -1298,27 +1452,14 @@ fn build_label(
     for marker in ["PENTAKILL", "QUADRA KILL", "TRIPLE KILL", "2V1 DOUBLE KILL", "DOUBLE KILL"] {
         if joined.contains(marker) {
             if objective {
-                let steal = if joined.contains("ELDER") {
-                    "ELDER STEAL"
-                } else if joined.contains("BARON") {
-                    "BARON STEAL"
-                } else {
-                    "DRAGON STEAL"
-                };
+                let steal = steal_name(&joined);
                 return format!("{marker} + {steal}");
             }
             return marker.into();
         }
     }
     if objective && combat {
-        return if joined.contains("ELDER") {
-            "ELDER STEAL FIGHT"
-        } else if joined.contains("BARON") {
-            "BARON STEAL FIGHT"
-        } else {
-            "DRAGON STEAL FIGHT"
-        }
-        .into();
+        return format!("{} FIGHT", steal_name(&joined));
     }
     if reasons.contains("survived at") && combat {
         return "LOW-HEALTH OUTPLAY".into();
@@ -1352,6 +1493,10 @@ fn fit_to_buffer(action: f64, pre: f64, post: f64, buffer_seconds: f64) -> (f64,
     }
     (round2(fitted_pre), round2(fitted_post))
 }
+
+#[cfg(test)]
+#[path = "live_tests.rs"]
+mod detector_tests;
 
 #[cfg(test)]
 mod tests {

@@ -50,6 +50,12 @@ fn request_event_type(r: &HighlightRequest) -> String {
         return "MANUAL_TRIGGER".into();
     }
     let label = r.clean_label();
+    if r.event_kind == "victory" {
+        return "VICTORY".into();
+    }
+    if r.event_kind == "objective" {
+        return "OBJECTIVE_STEAL".into();
+    }
     if label.contains("BARON") {
         return if label.contains("STEAL") { "BARON_STEAL" } else { "BARON" }.into();
     }

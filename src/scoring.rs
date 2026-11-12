@@ -24,6 +24,9 @@ pub struct PlayCandidate {
     pub action_seconds: f64,
     pub assist_count: i64,
     pub assist_heavy: bool,
+    /// Highest kill streak among the victims (shutdowns).
+    pub victim_streak: i64,
+    pub first_blood: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -59,6 +62,14 @@ pub fn score_candidate(c: &PlayCandidate, enabled: bool, sensitivity: &str, adju
             if c.solo_kills > 0 {
                 score += if c.solo_kills == 1 { 15 } else { (10 + c.solo_kills * 5).min(25) };
                 reasons.push(plural(c.solo_kills, "solo kill"));
+            }
+            if c.victim_streak >= 3 {
+                score += (10 + (c.victim_streak - 3) * 4).min(24);
+                reasons.push(format!("shut down a {}-kill streak", c.victim_streak));
+            }
+            if c.first_blood {
+                score += 12;
+                reasons.push("first blood".into());
             }
             if c.outnumbered_kill_count >= 2 {
                 score += (18 + (c.outnumbered_kill_count - 2) * 6).min(30);
@@ -145,6 +156,18 @@ pub fn score_candidate(c: &PlayCandidate, enabled: bool, sensitivity: &str, adju
                 reasons.push("objective steal".into());
             }
         }
+        "objective" => {
+            score += 25;
+            reasons.push("epic monster".into());
+            if c.stolen {
+                score += 35;
+                reasons.push("objective steal".into());
+            }
+        }
+        "victory" => {
+            score += 60;
+            reasons.push("won the game".into());
+        }
         _ => {
             score += 15;
             reasons.push("game event".into());
@@ -153,6 +176,8 @@ pub fn score_candidate(c: &PlayCandidate, enabled: bool, sensitivity: &str, adju
 
     let force_keep = c.kill_count >= 3
         || c.outnumbered_kill_count >= 2
+        || c.victim_streak >= 5
+        || c.kind == "victory"
         || c.stolen
         || c.elder
         || (c.kind == "assist" && c.assist_count >= 3)
@@ -257,7 +282,9 @@ const GROUP_GAP: f64 = 12.0;
 const MIN_TRIM: f64 = 8.0;
 const MANUAL_PRE_TRIGGER: f64 = 15.0;
 
-const RELIABLE_TYPES: [&str; 9] = [
+const RELIABLE_TYPES: [&str; 11] = [
+    "OBJECTIVE_STEAL",
+    "VICTORY",
     "CHAMPION_KILL",
     "PLAYER_DEATH",
     "MULTIKILL",
@@ -332,6 +359,24 @@ fn ensure_minimum(start: f64, end: f64, duration: f64, focus: f64) -> (f64, f64)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdowns_and_first_blood_score_higher() {
+        let plain = score_candidate(&PlayCandidate { kind: "kill", kill_count: 1, ..Default::default() }, true, "balanced", 0);
+        let shutdown = score_candidate(
+            &PlayCandidate { kind: "kill", kill_count: 1, victim_streak: 5, ..Default::default() },
+            true,
+            "strict",
+            0,
+        );
+        assert!(!plain.keep);
+        assert!(shutdown.keep, "a 5-streak shutdown is always kept");
+        assert!(shutdown.reasons.iter().any(|r| r == "shut down a 5-kill streak"));
+        let fb = score_candidate(&PlayCandidate { kind: "kill", kill_count: 1, first_blood: true, ..Default::default() }, true, "balanced", 0);
+        assert_eq!(fb.score, 12 + 12);
+        let herald = score_candidate(&PlayCandidate { kind: "objective", stolen: true, ..Default::default() }, true, "strict", 0);
+        assert!(herald.keep && herald.score == 60);
+    }
 
     #[test]
     fn pentakill_is_kept_even_when_strict() {

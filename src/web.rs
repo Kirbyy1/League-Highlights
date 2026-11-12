@@ -297,6 +297,14 @@ fn handle(ctx: &WebCtx, mut request: Request, port: u16, token: &str) {
             }
             json_response(&json!({"ok": true}))
         }
+        (Method::Get, ["api", "learning"]) => {
+            let (likes, dislikes) = crate::learn::summary(&crate::learn::load(&ctx.paths.root));
+            json_response(&json!({ "likes": likes, "dislikes": dislikes }))
+        }
+        (Method::Post, ["api", "learning", "reset"]) => {
+            crate::learn::reset(&ctx.paths.root);
+            json_response(&json!({ "ok": true }))
+        }
         (Method::Get, ["api", "music"]) => {
             let dir = ctx.paths.root.join("music");
             json_response(&json!({ "tracks": crate::music::list(&dir, ctx.ff.as_deref()) }))
@@ -408,18 +416,50 @@ fn handle(ctx: &WebCtx, mut request: Request, port: u16, token: &str) {
     let _ = request.respond(response);
 }
 
+/// Score reasons of an automatic clip (empty for manual clips) and its rating.
+fn clip_reasons(clip: &Path) -> (Vec<String>, String) {
+    let meta = library::read_meta(&clip.with_extension("json"));
+    let automatic = meta.get("automatic").and_then(Value::as_bool).unwrap_or(false);
+    let reasons = if automatic {
+        meta.get("score_reasons")
+            .and_then(Value::as_array)
+            .map(|r| r.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    (reasons, meta.get("rating").and_then(Value::as_str).unwrap_or("").to_string())
+}
+
 fn clip_action(ctx: &WebCtx, clip: &Path, action: &str, body: &Value) -> Result<Value, String> {
     match action {
         "rate" => {
-            library::set_rating(clip, body["rating"].as_str().unwrap_or(""))?;
+            let rating = body["rating"].as_str().unwrap_or("");
+            let (reasons, previous) = clip_reasons(clip);
+            library::set_rating(clip, rating)?;
+            // Teach Smart Highlights (only when the rating actually changes).
+            let signal = match rating {
+                "good" if previous != "good" => crate::learn::GOOD,
+                "bad" if previous != "bad" => crate::learn::BAD,
+                _ => 0,
+            };
+            crate::learn::record(&ctx.paths.root, &reasons, signal);
             Ok(json!({"ok": true}))
         }
         "delete" => {
+            if body["source"].as_str() == Some("review") {
+                let (reasons, _) = clip_reasons(clip);
+                crate::learn::record(&ctx.paths.root, &reasons, crate::learn::DELETED_IN_REVIEW);
+            }
             library::delete(clip);
             Ok(json!({"ok": true}))
         }
         "reviewed" => {
             library::set_reviewed(clip, body["reviewed"].as_bool().unwrap_or(true))?;
+            if body["source"].as_str() == Some("review") {
+                let (reasons, _) = clip_reasons(clip);
+                crate::learn::record(&ctx.paths.root, &reasons, crate::learn::KEPT_IN_REVIEW);
+            }
             Ok(json!({"ok": true}))
         }
         "copy" => {
@@ -450,7 +490,7 @@ fn clip_action(ctx: &WebCtx, clip: &Path, action: &str, body: &Value) -> Result<
             let end = body["end"].as_f64().ok_or("Missing end")?;
             let target = (ctx.cfg.read().unwrap().discord_target_mb * 1_000_000.0) as u64;
             let (path, size) = crate::share::discord_copy(ff, clip, start, end, target)?;
-            let copied = win::copy_files_to_clipboard(&[path.clone()]).is_ok();
+            let copied = win::copy_files_to_clipboard(std::slice::from_ref(&path)).is_ok();
             Ok(json!({ "ok": true, "file": path.file_name().map(|f| f.to_string_lossy().into_owned()), "size": size, "copied": copied }))
         }
         "reveal" => {
