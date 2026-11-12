@@ -1,11 +1,11 @@
-//! Notification-area icon, menu and balloons. Runs on the main thread.
+﻿//! Notification-area icon, menu and balloons. Runs on the main thread.
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIIF_NOSOUND,
@@ -66,7 +66,7 @@ fn post(message: u32) {
     let hwnd = HWND_VALUE.load(Ordering::SeqCst);
     if hwnd != 0 {
         unsafe {
-            let _ = PostMessageW(HWND(hwnd as *mut _), message, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(Some(HWND(hwnd as *mut _)), message, WPARAM(0), LPARAM(0));
         }
     }
 }
@@ -98,7 +98,7 @@ pub fn signal_existing_instance() -> bool {
     unsafe {
         match FindWindowW(CLASS, PCWSTR::null()) {
             Ok(hwnd) if !hwnd.0.is_null() => {
-                let _ = PostMessageW(hwnd, WM_OPEN_LIBRARY, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(Some(hwnd), WM_OPEN_LIBRARY, WPARAM(0), LPARAM(0));
                 true
             }
             _ => false,
@@ -139,7 +139,7 @@ pub fn app_icon(want: i32) -> HICON {
         if let Some((_, offset, bytes, _)) = best {
             if let Ok(icon) = CreateIconFromResourceEx(
                 &ICON[offset..offset + bytes],
-                BOOL(1),
+                true,
                 0x0003_0000,
                 want,
                 want,
@@ -164,7 +164,7 @@ fn base_data(hwnd: HWND) -> NOTIFYICONDATAW {
 fn tooltip() -> String {
     let Some(ctx) = CONTEXT.get() else { return "League Highlights".into() };
     let status = ctx.status.read().unwrap();
-    format!("League Highlights — {}", title_case(status.state))
+    format!("League Highlights â€” {}", title_case(status.state))
 }
 
 unsafe fn add_icon(hwnd: HWND) {
@@ -207,7 +207,7 @@ unsafe fn show_menu(hwnd: HWND) {
     };
     let hotkey = ctx.cfg.read().unwrap().hotkey_display.clone();
     let none = windows::Win32::UI::WindowsAndMessaging::MENU_ITEM_FLAGS(0);
-    append(menu, 0, &format!("League Highlights — {state}"), MF_GRAYED);
+    append(menu, 0, &format!("League Highlights â€” {state}"), MF_GRAYED);
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     append(menu, ID_LIBRARY, "Open library", none);
     append(menu, ID_SAVE, &format!("Save clip now\t{hotkey}"), none);
@@ -223,8 +223,8 @@ unsafe fn show_menu(hwnd: HWND) {
     let mut point = POINT::default();
     let _ = GetCursorPos(&mut point);
     let _ = SetForegroundWindow(hwnd);
-    let _ = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, point.x, point.y, 0, hwnd, None);
-    let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+    let _ = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, point.x, point.y, None, hwnd, None);
+    let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
     let _ = DestroyMenu(menu);
 }
 
@@ -341,7 +341,7 @@ pub fn run(context: TrayContext) {
             0,
             None,
             None,
-            instance,
+            Some(instance.into()),
             None,
         ) else {
             log::error!("Could not create the tray window");
@@ -355,7 +355,7 @@ pub fn run(context: TrayContext) {
         }
         if std::env::var_os("LH_TOAST_TEST").is_some() {
             // Developer check: show the in-game toast once without a game.
-            crate::overlay::set("2v1 Double Kill", "Saved · 18s · score 88", crate::overlay::Tone::Saved);
+            crate::overlay::set("2v1 Double Kill", "Saved Â· 18s Â· score 88", crate::overlay::Tone::Saved);
             crate::overlay::present();
         }
         let mut msg = MSG::default();

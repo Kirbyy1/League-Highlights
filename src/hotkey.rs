@@ -93,7 +93,7 @@ pub fn start(tx: Sender<Cmd>) {
     let _ = SENDER.set(tx);
     let _ = std::thread::Builder::new().name("hotkey".into()).spawn(|| unsafe {
         let module = GetModuleHandleW(None).unwrap_or_default();
-        match SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook), module, 0) {
+        match SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook), Some(module.into()), 0) {
             Ok(_) => log::info!("Global clip hotkey active (low-level keyboard hook)"),
             Err(e) => {
                 log::error!("Could not install the global shortcut hook: {e}");

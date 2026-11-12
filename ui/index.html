@@ -175,6 +175,24 @@ body.selecting #selbar { display: flex; }
 .storage .bar i { display: block; height: 100%; background: var(--accent); }
 .storage button { font-size: 12.5px; padding: 3px 8px; }
 
+/* ---------- setup check ---------- */
+.checks { margin-top: 22px; }
+.chk { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--line); }
+.chk:first-child { border-top: 1px solid var(--line); }
+.chk .st { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+.chk .st svg { width: 13px; height: 13px; stroke-width: 2.4; }
+.chk .st.ok { background: rgba(10, 200, 185, .15); color: var(--good); }
+.chk .st.warn { background: rgba(224, 168, 58, .16); color: var(--warn); }
+.chk .st.fail { background: rgba(232, 64, 87, .16); color: var(--bad); }
+.chk .st.info { background: var(--hover); color: var(--muted); }
+.chk .txt { flex: 1; min-width: 0; }
+.chk .txt div { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.chk button { border: 1px solid var(--line); color: var(--text); flex: none; }
+.setupfoot { display: flex; gap: 8px; margin-top: 22px; align-items: center; }
+.setupfoot .grow { flex: 1; }
+.upd { width: 100%; justify-content: center; color: var(--accent); font-size: 12.5px; padding: 5px 8px; }
+.upd[hidden] { display: none; }
+
 /* ---------- review ---------- */
 .rvhead { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
 .rvhead .muted { font-family: var(--mono); font-size: 12px; }
@@ -312,6 +330,7 @@ window.addEventListener("error", e => { if (window.ipc) window.ipc.postMessage("
   <div class="pills" id="pills"><button data-r="" class="on">All</button><button data-r="Victory">Wins</button><button data-r="Defeat">Losses</button></div>
   <div id="matchList"></div>
   <div class="foot">
+    <button class="upd" id="updBtn" hidden title="Open the release page"></button>
     <div class="pill" id="statPill" title="Recorder status"><span class="dot" id="dot"></span><div class="txt"><div class="st"><span id="state">Starting</span> <span class="mono muted" id="timer"></span></div><div class="det" id="statusDetail"></div></div></div>
     <div class="row2">
       <button id="btnSave" class="primary" title="Save the last seconds now"><span data-icon="record"></span>Save clip <kbd id="hkFoot">F8</kbd></button>
@@ -335,6 +354,7 @@ window.addEventListener("error", e => { if (window.ipc) window.ipc.postMessage("
     <section class="view on" id="homeView"><div class="col" id="home"></div></section>
     <section class="view" id="matchView"><div class="col" id="detail"></div></section>
     <section class="view" id="reviewView"><div class="col" id="review"></div></section>
+    <section class="view" id="setupView"><div class="col" id="setup"></div></section>
     <section class="view" id="settingsView"><div class="col"><h1>Settings</h1><div class="setwrap"><nav class="cats" id="cats"></nav><div class="sets" id="settingsPage"></div></div></div></section>
     <section class="view" id="statusView"><div class="col" id="statusPage"></div></section>
   </div>
@@ -390,6 +410,9 @@ const P = {
   copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/>',
   send: '<path d="M20.5 3.5 10 14M20.5 3.5l-6.5 17-4-6.5-6.5-4z"/>',
   next: '<path d="m9 5 7 7-7 7"/>',
+  warn: '<path d="M12 7.5v6M12 17h.01"/>',
+  x: '<path d="m7 7 10 10M17 7 7 17"/>',
+  info: '<path d="M12 11v6M12 7h.01"/>',
   wmin: '<path d="M0 5h10"/>',
   wmax: '<rect x=".5" y=".5" width="9" height="9" rx="1"/>',
   wrestore: '<rect x=".5" y="2.5" width="7" height="7" rx="1"/><path d="M2.5 2.5v-1a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-1"/>',
@@ -426,6 +449,7 @@ function show(view) {
   if (view === "settings") loadSettings();
   if (view === "status") renderStatus();
   if (view === "home") renderHome();
+  if (view === "setup") renderSetup();
   if (view !== "match") { const v = $("#video"); if (v) v.pause(); }
 }
 $("#navHome").onclick = () => show("home");
@@ -486,6 +510,10 @@ $("#btnSave").onclick = saveNow; $("#btnToggle").onclick = toggleRec; $("#btnFol
 
 function renderStatus() {
   const s = lastStatus; if (!s) return;
+  setTimeout(() => {
+    if ($("#runSetup")) $("#runSetup").onclick = () => show("setup");
+    if ($("#statusUpd")) $("#statusUpd").onclick = () => api("/api/action/open-release", {});
+  });
   const d = s.diagnostics || {}, live = s.live || {}, m = live.match;
   const rows = [
     ["State", title(s.status.state)], ["Detail", s.status.detail || "—"],
@@ -501,7 +529,9 @@ function renderStatus() {
     ["Last error", s.status.last_error || "None"],
     ["FFmpeg", s.ffmpeg || "Missing"], ["Version", s.version],
   ];
-  $("#statusPage").innerHTML = "<h1>Status</h1><dl>" + rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("") + "</dl>"
+  const u = state.update;
+  rows.push(["Updates", !u ? "Checking…" : !u.enabled ? "Update check is off" : u.available ? `${u.latest} available` : u.error ? "Couldn't check" : `Up to date (latest ${u.latest || s.version})`]);
+  $("#statusPage").innerHTML = `<div class="rvhead"><h1>Status</h1><span class="grow"></span></div><div class="setupfoot"><button class="primary" id="runSetup">${icon("check")}Run setup check</button>${u && u.available ? `<button id="statusUpd">Get ${esc(u.latest)}</button>` : ""}</div><dl>` + rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("") + "</dl>"
     + `<p class="legal">League Highlights isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</p>`;
 }
 
@@ -683,6 +713,49 @@ $("#selDelete").onclick = async () => {
   await api("/api/clips/delete", { files: [...state.sel] }).catch(e => toast(e.message, false));
   toast(`Deleted ${n} clip${n === 1 ? "" : "s"}`); clearPicks(); loadClips(); loadStorage();
 };
+
+/* ---------- setup check ---------- */
+async function renderSetup() {
+  const first = state.settings && !state.settings.setup_seen;
+  $("#setup").innerHTML = `<h1>${first ? "Welcome to League Highlights" : "Setup check"}</h1>
+    <div class="muted" style="margin-top:6px">${first ? "A quick check that everything recording needs is ready." : "Everything recording depends on."}</div>
+    <div class="checks" id="checks"><div class="chk"><span class="st info">${icon("info")}</span><div class="txt">Checking…</div></div></div>`;
+  let data;
+  try { data = await api("/api/setup"); } catch (e) { toast(e.message, false); return; }
+  if (state.view !== "setup") return;
+  const icons = { ok: "check", warn: "warn", fail: "x", info: "info" };
+  $("#checks").innerHTML = data.checks.map(c => `<div class="chk"><span class="st ${c.status}">${icon(icons[c.status] || "info")}</span>
+    <div class="txt">${esc(c.title)}<div>${esc(c.detail)}</div></div>${c.fix ? `<button data-fix="${esc(c.fix[1])}">${esc(c.fix[0])}</button>` : ""}</div>`).join("");
+  const fails = data.checks.filter(c => c.status === "fail").length, warns = data.checks.filter(c => c.status === "warn").length;
+  $("#setup").insertAdjacentHTML("beforeend", `<div class="setupfoot"><span class="muted">${fails ? `${fails} problem${fails === 1 ? "" : "s"} to fix` : warns ? `Ready, with ${warns} suggestion${warns === 1 ? "" : "s"}` : "Everything is ready. Start a League game in Borderless mode."}</span><span class="grow"></span>
+    <button id="setupAgain">Check again</button><button class="primary" id="setupDone">${first ? "Get started" : "Done"}</button></div>`);
+  $$("#checks [data-fix]").forEach(b => b.onclick = () => {
+    const fix = b.dataset.fix;
+    if (fix === "download-ffmpeg") api("/api/action/download-ffmpeg", {});
+    else if (fix === "cleanup") { show("home"); cleanUp(); }
+    else if (fix.startsWith("settings:")) openSettingsSection(fix.slice(9));
+  });
+  $("#setupAgain").onclick = renderSetup;
+  $("#setupDone").onclick = async () => {
+    if (first) { try { state.settings = await api("/api/settings", { setup_seen: true }); } catch {} }
+    show("home");
+  };
+}
+async function openSettingsSection(name) {
+  show("settings");
+  for (let i = 0; i < 20 && !$("#cats button"); i++) await new Promise(r => setTimeout(r, 50));
+  const b = $$("#cats button").find(x => x.textContent === name);
+  if (b) b.click();
+}
+async function checkUpdate() {
+  try {
+    const u = await api("/api/update");
+    state.update = u;
+    const b = $("#updBtn");
+    b.hidden = !u.available;
+    if (u.available) { b.innerHTML = `${icon("send")}Update ${esc(u.latest)} available`; b.onclick = () => api("/api/action/open-release", {}); }
+  } catch {}
+}
 
 /* ---------- post-match review ---------- */
 function openReview(matchId) {
@@ -985,7 +1058,8 @@ function renderSettings() {
     ["App", `
       ${row("Launch with Windows", "Starts quietly in the notification area.", check("launch_with_windows", s))}
       ${row("Start minimized", "Don't open this window when the app is started manually.", check("start_minimized", s))}
-      ${row("Champion art", "Downloads champion icons and splash art from Riot's Data Dragon once, then uses the local copy.", check("champion_art", s))}`],
+      ${row("Champion art", "Downloads champion icons and splash art from Riot's Data Dragon once, then uses the local copy.", check("champion_art", s))}
+      ${row("Check for updates", "Looks for a newer release on GitHub every few hours and shows a link. Nothing installs automatically.", check("check_for_updates", s))}`],
     ["Notifications & sharing", `
       ${row("In-game notifications", "A small toast in the corner of the game when a clip is saved. Click-through; never takes focus.", check("overlay_notifications", s))}
       ${row("Notify when a clip is saved", "Windows notification when League isn't open.", check("notify_on_save", s))}
@@ -1013,7 +1087,7 @@ async function saveSetting(el) {
   else if (el.type === "checkbox") change = { [k]: el.checked };
   else if (el.dataset.num !== undefined) change = { [k]: Number(el.value) };
   else change = { [k]: el.value };
-  try { state.settings = await api("/api/settings", change); toast("Saved"); if (k === "champion_art") loadClips(); }
+  try { state.settings = await api("/api/settings", change); toast("Saved"); if (k === "champion_art") loadClips(); if (k === "check_for_updates") checkUpdate(); }
   catch (e) { toast(e.message, false); renderSettings(); }
 }
 function setHotkey(h) { state.hotkey = h || "F8"; $("#hkFoot").textContent = state.hotkey; }
@@ -1055,6 +1129,7 @@ function commands() {
     { name: "Highlights", ic: "grid", run: () => show("home") },
     { name: "Settings", ic: "gear", run: () => show("settings") },
     { name: "Status", ic: "pulse", run: () => show("status") },
+    { name: "Setup check", ic: "check", run: () => show("setup") },
     { name: "Open clips folder", ic: "folder", run: openFolder },
     { name: "Toggle sidebar", ic: "sidebar", hint: "Ctrl B", run: toggleSide },
     ...state.games.map(g => ({ name: gameName(g) + (g.result ? " · " + g.result : ""), game: g, hint: dateText(g.started), run: () => openGame(g) })),
@@ -1123,6 +1198,8 @@ $("#navHome").classList.add("on");
 api("/api/settings").then(s => { state.settings = s; setHotkey(s.hotkey_display); }).catch(() => {}).finally(async () => {
   await loadClips();
   loadStorage();
+  checkUpdate();
+  if (state.settings && !state.settings.setup_seen && location.hash !== "#uitest") show("setup");
   if (location.hash === "#review") { history.replaceState(null, "", "/"); openReview(); }
   if (location.hash === "#uitest" && window.ipc) {
     // Developer check (LH_UI_TEST): play the first clip and report playback.

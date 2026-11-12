@@ -20,7 +20,8 @@ use raw_window_handle::{
     HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle,
 };
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{BOOL, COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::core::BOOL;
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows::Win32::Graphics::Gdi::CreateSolidBrush;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -57,7 +58,7 @@ static PENDING_SCRIPT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(
 
 pub fn is_open() -> bool {
     let hwnd = OPEN.load(Ordering::SeqCst);
-    hwnd != 0 && unsafe { IsWindow(HWND(hwnd as *mut _)).as_bool() }
+    hwnd != 0 && unsafe { IsWindow(Some(HWND(hwnd as *mut _))).as_bool() }
 }
 
 /// Run JavaScript in the open window (from any thread) and bring it forward.
@@ -69,7 +70,7 @@ pub fn run_script(script: &str) {
     *PENDING_SCRIPT.lock().unwrap() = Some(script.to_string());
     let hwnd = HWND(hwnd as *mut _);
     unsafe {
-        let _ = PostMessageW(hwnd, WM_RUN_SCRIPT, WPARAM(0), LPARAM(0));
+        let _ = PostMessageW(Some(hwnd), WM_RUN_SCRIPT, WPARAM(0), LPARAM(0));
         if IsIconic(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_RESTORE);
         }
@@ -154,7 +155,7 @@ unsafe fn begin_nc_drag(hwnd: HWND, hit: u32) {
     let _ = GetCursorPos(&mut point);
     let _ = ReleaseCapture();
     let packed = ((point.y as u32 & 0xFFFF) << 16) | (point.x as u32 & 0xFFFF);
-    let _ = PostMessageW(hwnd, WM_NCLBUTTONDOWN, WPARAM(hit as usize), LPARAM(packed as isize));
+    let _ = PostMessageW(Some(hwnd), WM_NCLBUTTONDOWN, WPARAM(hit as usize), LPARAM(packed as isize));
 }
 
 fn handle_ipc(hwnd: isize, message: &str) {
@@ -170,7 +171,7 @@ fn handle_ipc(hwnd: isize, message: &str) {
                 let _ = ShowWindow(hwnd, if IsZoomed(hwnd).as_bool() { SW_RESTORE } else { SW_MAXIMIZE });
             }
             "close" => {
-                let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
             }
             other => {
                 if let Some(text) = other.strip_prefix("log:") {
@@ -194,7 +195,7 @@ pub fn open(url: String, data_dir: PathBuf) -> Result<(), String> {
     if existing != 0 {
         let hwnd = HWND(existing as *mut _);
         unsafe {
-            if IsWindow(hwnd).as_bool() {
+            if IsWindow(Some(hwnd)).as_bool() {
                 if IsIconic(hwnd).as_bool() {
                     let _ = ShowWindow(hwnd, SW_RESTORE);
                 }
@@ -238,7 +239,7 @@ fn run(url: String, data_dir: PathBuf, ready: mpsc::Sender<Result<(), String>>) 
             820,
             None,
             None,
-            instance,
+            Some(instance.into()),
             None,
         ) {
             Ok(hwnd) => hwnd,
@@ -257,7 +258,7 @@ fn run(url: String, data_dir: PathBuf, ready: mpsc::Sender<Result<(), String>>) 
         );
         for (kind, size) in [(ICON_BIG, 32), (ICON_SMALL, 16)] {
             let icon = crate::tray::app_icon(size);
-            SendMessageW(hwnd, WM_SETICON, WPARAM(kind as usize), LPARAM(icon.0 as isize));
+            SendMessageW(hwnd, WM_SETICON, Some(WPARAM(kind as usize)), Some(LPARAM(icon.0 as isize)));
         }
         // DPI-scaled size, centred; SWP_FRAMECHANGED applies the custom frame.
         let scale = f64::from(GetDpiForWindow(hwnd).max(96)) / 96.0;

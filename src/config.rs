@@ -90,6 +90,10 @@ pub struct Settings {
     pub cleanup_days: u32,
     /// Upload limit used for Discord-ready copies, in MB.
     pub discord_target_mb: f64,
+    /// Look for a newer GitHub release (notify only).
+    pub check_for_updates: bool,
+    /// The first-run setup check has been shown.
+    pub setup_seen: bool,
 
     pub discord_auto_trim_events: bool,
     pub auto_clip_single_kill: bool,
@@ -142,6 +146,8 @@ impl Default for Settings {
             overlay_notifications: true,
             cleanup_days: 0,
             discord_target_mb: 9.5,
+            check_for_updates: true,
+            setup_seen: false,
             discord_auto_trim_events: true,
             auto_clip_single_kill: true,
             auto_clip_double_kill: true,

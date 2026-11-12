@@ -68,10 +68,10 @@ fn font(height: i32, weight: i32) -> HFONT {
             0,
             0,
             0,
-            DEFAULT_CHARSET.0 as u32,
-            OUT_DEFAULT_PRECIS.0 as u32,
-            CLIP_DEFAULT_PRECIS.0 as u32,
-            CLEARTYPE_QUALITY.0 as u32,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
             0,
             w!("Segoe UI"),
         )
@@ -89,7 +89,7 @@ unsafe extern "system" fn proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
             let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rect);
             let background = CreateSolidBrush(COLORREF(0x001f_1d1d));
             FillRect(hdc, &rect, background);
-            let _ = DeleteObject(background);
+            let _ = DeleteObject(background.into());
 
             let content = CONTENT.lock().unwrap();
             if let Some(content) = content.as_ref() {
@@ -102,33 +102,33 @@ unsafe extern "system" fn proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 let bar = RECT { left: 0, top: 0, right: px(4.0), bottom: rect.bottom };
                 let brush = CreateSolidBrush(COLORREF(accent));
                 FillRect(hdc, &bar, brush);
-                let _ = DeleteObject(brush);
+                let _ = DeleteObject(brush.into());
 
                 SetBkMode(hdc, TRANSPARENT);
                 let flags = DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX;
                 let title_font = font(-px(15.0), 600);
-                let old = SelectObject(hdc, title_font);
+                let old = SelectObject(hdc, title_font.into());
                 SetTextColor(hdc, COLORREF(0x00e7_ebec));
                 let mut title_rect = RECT { left: px(18.0), top: px(9.0), right: rect.right - px(14.0), bottom: px(33.0) };
                 let mut title = wide(&content.title);
                 title.pop();
                 DrawTextW(hdc, &mut title, &mut title_rect, flags);
                 let detail_font = font(-px(12.5), 400);
-                SelectObject(hdc, detail_font);
+                SelectObject(hdc, detail_font.into());
                 SetTextColor(hdc, COLORREF(0x0095_9a9b));
                 let mut detail_rect = RECT { left: px(18.0), top: px(32.0), right: rect.right - px(14.0), bottom: px(54.0) };
                 let mut detail = wide(&content.detail);
                 detail.pop();
                 DrawTextW(hdc, &mut detail, &mut detail_rect, flags);
                 SelectObject(hdc, old);
-                let _ = DeleteObject(title_font);
-                let _ = DeleteObject(detail_font);
+                let _ = DeleteObject(title_font.into());
+                let _ = DeleteObject(detail_font.into());
             }
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_HIDE => {
-            let _ = KillTimer(hwnd, TIMER_HIDE);
+            let _ = KillTimer(Some(hwnd), TIMER_HIDE);
             let _ = ShowWindow(hwnd, SW_HIDE);
             LRESULT(0)
         }
@@ -160,7 +160,7 @@ unsafe fn ensure_window() -> Option<HWND> {
         10,
         None,
         None,
-        instance,
+        Some(instance.into()),
         None,
     )
     .ok()?;
@@ -188,12 +188,12 @@ pub fn present() {
         let area = info.rcMonitor;
         let x = area.right - width - margin;
         let y = area.top + margin + (40.0 * scale) as i32;
-        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
+        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, width, height, SWP_NOACTIVATE);
         let radius = (14.0 * scale) as i32;
         let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius, radius);
-        SetWindowRgn(hwnd, region, true);
-        let _ = InvalidateRect(hwnd, None, true);
+        SetWindowRgn(hwnd, Some(region), true);
+        let _ = InvalidateRect(Some(hwnd), None, true);
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        SetTimer(hwnd, TIMER_HIDE, 2800, None);
+        SetTimer(Some(hwnd), TIMER_HIDE, 2800, None);
     }
 }

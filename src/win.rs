@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use windows::core::{w, PCWSTR, PWSTR};
+use windows::core::BOOL;
 use windows::Win32::Foundation::{
-    CloseHandle, GetLastError, BOOL, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, RECT,
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, RECT,
 };
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 use windows::Win32::Graphics::Gdi::{
@@ -303,7 +304,7 @@ pub fn set_startup(enabled: bool) -> Result<(), String> {
             let command = format!("\"{}\" --startup", exe.display());
             let data = wide(&command);
             let bytes = std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2);
-            RegSetValueExW(key, RUN_VALUE, 0, REG_SZ, Some(bytes)).ok()
+            RegSetValueExW(key, RUN_VALUE, None, REG_SZ, Some(bytes)).ok()
         } else {
             let _ = RegDeleteValueW(key, RUN_VALUE);
             Ok(())
@@ -395,7 +396,7 @@ pub fn copy_files_to_clipboard(paths: &[PathBuf]) -> Result<(), String> {
         let memory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes).map_err(|e| e.to_string())?;
         let pointer = GlobalLock(memory) as *mut u8;
         if pointer.is_null() {
-            let _ = GlobalFree(memory);
+            let _ = GlobalFree(Some(memory));
             return Err("Could not allocate clipboard memory".into());
         }
         let header = [HEADER as u32, 0, 0, 0, 1]; // fWide = TRUE
@@ -403,14 +404,14 @@ pub fn copy_files_to_clipboard(paths: &[PathBuf]) -> Result<(), String> {
         std::ptr::copy_nonoverlapping(list.as_ptr() as *const u8, pointer.add(HEADER), list.len() * 2);
         let _ = GlobalUnlock(memory);
         if OpenClipboard(None).is_err() {
-            let _ = GlobalFree(memory);
+            let _ = GlobalFree(Some(memory));
             return Err("The clipboard is in use by another app".into());
         }
         let _ = EmptyClipboard();
-        let result = SetClipboardData(CF_HDROP, HANDLE(memory.0));
+        let result = SetClipboardData(CF_HDROP, Some(HANDLE(memory.0)));
         let _ = CloseClipboard();
         if result.is_err() {
-            let _ = GlobalFree(memory);
+            let _ = GlobalFree(Some(memory));
             return Err("Could not copy to the clipboard".into());
         }
     }

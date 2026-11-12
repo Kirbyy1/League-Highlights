@@ -3,7 +3,6 @@ name = "league-highlights"
 version = "2.0.0"
 edition = "2021"
 description = "Lightweight League of Legends highlight recorder for Windows"
-license = "MIT"
 publish = false
 
 [[bin]]
@@ -21,7 +20,7 @@ wry = { version = "0.50", default-features = false }
 raw-window-handle = "0.6"
 
 [dependencies.windows]
-version = "0.58"
+version = "0.60"
 features = [
     "Win32_Foundation",
     "Win32_Security",

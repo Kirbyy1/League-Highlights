@@ -283,6 +283,12 @@ fn handle(ctx: &WebCtx, mut request: Request, port: u16, token: &str) {
                 "toggle" => {
                     let _ = ctx.tx.send(Cmd::ToggleRecording);
                 }
+                "download-ffmpeg" => win::shell_open("https://www.gyan.dev/ffmpeg/builds/"),
+                "open-release" => {
+                    if let Some(url) = crate::update::release_url() {
+                        win::shell_open(&url);
+                    }
+                }
                 "open-folder" => {
                     let _ = std::fs::create_dir_all(&clip_dir);
                     win::open_folder(&clip_dir);
@@ -290,6 +296,15 @@ fn handle(ctx: &WebCtx, mut request: Request, port: u16, token: &str) {
                 _ => {}
             }
             json_response(&json!({"ok": true}))
+        }
+        (Method::Get, ["api", "setup"]) => {
+            let settings = ctx.cfg.read().unwrap().clone();
+            let checks = crate::setup::run(&settings, ctx.ff.as_deref());
+            json_response(&json!({ "checks": checks }))
+        }
+        (Method::Get, ["api", "update"]) => {
+            let enabled = ctx.cfg.read().unwrap().check_for_updates;
+            json_response(&crate::update::status(enabled))
         }
         (Method::Get, ["api", "storage"]) => {
             let days = ctx.cfg.read().unwrap().cleanup_days;

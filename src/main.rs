@@ -21,6 +21,8 @@ mod recorder;
 mod scoring;
 mod overlay;
 mod selftest;
+mod setup;
+mod update;
 mod share;
 mod tray;
 mod util;
