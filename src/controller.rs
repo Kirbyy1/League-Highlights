@@ -413,6 +413,14 @@ impl Controller {
 
     fn stop_recording(&mut self, reason: &str) {
         if let Some(recorder) = &self.recorder {
+            // Capture health goes in the log so a match can be checked afterwards.
+            let d = recorder.diagnostics();
+            if recorder.has_session() && d.frame > 0 {
+                log::info!(
+                    "Capture summary: {} frames via {} ({}), {} dropped ({:.2}%), {} duplicated",
+                    d.frame, d.capture_backend, d.encoder, d.dropped_frames, d.drop_rate, d.duplicated_frames
+                );
+            }
             recorder.stop();
         }
         self.audio.stop();
