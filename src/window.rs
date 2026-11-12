@@ -54,6 +54,10 @@ const BROWSER_ARGS: &str = concat!(
 );
 static OPEN: AtomicIsize = AtomicIsize::new(0);
 const WM_RUN_SCRIPT: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 20;
+/// Live panel requests are handled from the window's own message loop: a
+/// view cannot be created from inside another view's message callback.
+const WM_LIVE: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 21;
+static PENDING_LIVE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static PENDING_SCRIPT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 pub fn is_open() -> bool {
@@ -80,6 +84,78 @@ pub fn run_script(script: &str) {
 
 thread_local! {
     static VIEW: RefCell<Option<wry::WebView>> = const { RefCell::new(None) };
+    static CONTEXT: RefCell<Option<wry::WebContext>> = const { RefCell::new(None) };
+    /// The live game stats panel: a second view over the content area, with
+    /// the page it shows. Porofessor refuses to load inside a frame.
+    static LIVE: RefCell<Option<(wry::WebView, String)>> = const { RefCell::new(None) };
+}
+
+/// Only this site may be shown in the live panel.
+const LIVE_PREFIX: &str = "https://porofessor.gg/live/";
+
+/// `live:show:<x>,<y>,<w>,<h>|<url>` from the page, in physical pixels.
+fn live_show(hwnd: isize, spec: &str) {
+    let Some((rect, url)) = spec.split_once('|') else { return };
+    let n: Vec<i32> = rect.split(',').filter_map(|v| v.trim().parse::<f64>().ok()).map(|v| v.round() as i32).collect();
+    if n.len() != 4 || n[2] < 50 || n[3] < 50 || !url.starts_with(LIVE_PREFIX) {
+        log::warn!("Ignored live panel request: {rect}");
+        return;
+    }
+    let bounds = wry::Rect {
+        position: wry::dpi::PhysicalPosition::new(n[0], n[1]).into(),
+        size: wry::dpi::PhysicalSize::new(n[2] as u32, n[3] as u32).into(),
+    };
+    LIVE.with(|live| {
+        // Creating a view pumps window messages, so a second request can
+        // arrive while the first is still being built: skip it.
+        let Ok(mut live) = live.try_borrow_mut() else { return };
+        if let Some((view, shown)) = live.as_mut() {
+            let _ = view.set_bounds(bounds);
+            if shown != url {
+                let _ = view.load_url(url);
+                *shown = url.to_string();
+            }
+            let _ = view.set_visible(true);
+            return;
+        }
+        CONTEXT.with(|context| {
+            let Ok(mut context) = context.try_borrow_mut() else { return };
+            let Some(context) = context.as_mut() else {
+                log::warn!("Live panel: the window is not ready");
+                return;
+            };
+            use wry::WebViewBuilderExtWindows;
+            log::info!("Opening the live game stats panel at {rect}");
+            let built = wry::WebViewBuilder::with_web_context(context)
+                .with_additional_browser_args(BROWSER_ARGS)
+                .with_bounds(bounds)
+                .with_url(url)
+                .with_background_color((29, 29, 31, 255))
+                // No pop-ups from the site; nothing here talks to the app.
+                .with_new_window_req_handler(|_| false)
+                .build_as_child(&Parent(hwnd));
+            match built {
+                Ok(view) => {
+                    log::info!("Live game stats panel opened");
+                    *live = Some((view, url.to_string()));
+                }
+                Err(e) => log::warn!("Could not open the live game stats panel: {e}"),
+            }
+        });
+    });
+}
+
+fn live_hide(close: bool) {
+    LIVE.with(|live| {
+        let Ok(mut live) = live.try_borrow_mut() else { return };
+        if close {
+            if live.take().is_some() {
+                log::info!("Live game stats panel closed");
+            }
+        } else if let Some((view, _)) = live.as_ref() {
+            let _ = view.set_visible(false);
+        }
+    });
 }
 
 struct Parent(isize);
@@ -123,6 +199,9 @@ unsafe extern "system" fn proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                     } else {
                         MemoryUsageLevel::Normal
                     });
+                    if minimized {
+                        live_hide(false);
+                    }
                     if !minimized {
                         let _ = view.evaluate_script(&format!("window.lhWindowState&&lhWindowState({maximized})"));
                     }
@@ -137,6 +216,16 @@ unsafe extern "system" fn proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                         let _ = view.evaluate_script(&script);
                     }
                 });
+            }
+            LRESULT(0)
+        }
+        WM_LIVE => {
+            if let Some(request) = PENDING_LIVE.lock().unwrap().take() {
+                match request.as_str() {
+                    "hide" => live_hide(false),
+                    "close" => live_hide(true),
+                    spec => live_show(hwnd.0 as isize, spec),
+                }
             }
             LRESULT(0)
         }
@@ -174,7 +263,12 @@ fn handle_ipc(hwnd: isize, message: &str) {
                 let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
             }
             other => {
-                if let Some(text) = other.strip_prefix("log:") {
+                if let Some(request) = other.strip_prefix("live:") {
+                    // Only the latest request matters.
+                    let request = request.strip_prefix("show:").unwrap_or(request);
+                    *PENDING_LIVE.lock().unwrap() = Some(request.to_string());
+                    let _ = PostMessageW(Some(hwnd), WM_LIVE, WPARAM(0), LPARAM(0));
+                } else if let Some(text) = other.strip_prefix("log:") {
                     let text: String = text.chars().take(300).collect();
                     if text.starts_with("uitest") {
                         log::info!("Library page {text}");
@@ -295,6 +389,7 @@ fn run(url: String, data_dir: PathBuf, ready: mpsc::Sender<Result<(), String>>) 
             }
         };
         VIEW.with(|view| *view.borrow_mut() = Some(webview));
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
         OPEN.store(hwnd_value, Ordering::SeqCst);
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetForegroundWindow(hwnd);
@@ -306,8 +401,9 @@ fn run(url: String, data_dir: PathBuf, ready: mpsc::Sender<Result<(), String>>) 
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        LIVE.with(|live| live.borrow_mut().take());
         VIEW.with(|view| view.borrow_mut().take());
-        drop(context);
+        CONTEXT.with(|slot| slot.borrow_mut().take());
         log::info!("Library window closed");
     }
 }

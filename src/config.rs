@@ -92,6 +92,8 @@ pub struct Settings {
     pub discord_target_mb: f64,
     /// Look for a newer GitHub release (notify only).
     pub check_for_updates: bool,
+    /// Show Porofessor's live page in champion select and in game.
+    pub live_stats: bool,
     /// The first-run setup check has been shown.
     pub setup_seen: bool,
 
@@ -151,6 +153,7 @@ impl Default for Settings {
             cleanup_days: 0,
             discord_target_mb: 9.5,
             check_for_updates: true,
+            live_stats: false,
             setup_seen: false,
             discord_auto_trim_events: true,
             auto_clip_single_kill: true,

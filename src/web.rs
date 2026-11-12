@@ -516,6 +516,7 @@ fn status_json(ctx: &WebCtx) -> Value {
     json!({
         "status": status,
         "now": crate::util::now(),
+        "live_page": crate::lcu::LIVE_PAGE.lock().unwrap().clone(),
         "library_changes": crate::library::CHANGES.load(std::sync::atomic::Ordering::Relaxed),
         "diagnostics": diagnostics(&ctx.recorder),
         "live": { "text": live_text, "connected": live_connected, "match": current },

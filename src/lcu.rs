@@ -111,22 +111,118 @@ pub fn fill_unknown_results_later(dir: PathBuf) {
     });
 }
 
-/// Check once a minute, while the League Client is open, for matches saved
-/// without a result (older versions, or a game closed before its result
-/// arrived). A match that is not in the recent history is given up on after
-/// a few tries. Nothing is read while the client is closed.
-pub fn watch_unknown_results(cfg: SharedSettings) {
-    let _ = std::thread::Builder::new().name("match-results-watch".into()).spawn(move || {
+/// The Porofessor live-game page for the current player while they are in
+/// champion select or in a game, when the setting is on. Read by the UI.
+pub static LIVE_PAGE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Background watcher. Does nothing while the League Client is closed.
+/// - Every 5 s, when live game stats are on: is the player in champion
+///   select or in a game? If so, publish their Porofessor page.
+/// - Once a minute: look up matches saved without a result (older versions,
+///   or a game closed before its result arrived). A match that is not in the
+///   recent history is given up on after a few tries.
+pub fn watch_client(cfg: SharedSettings) {
+    let _ = std::thread::Builder::new().name("league-client-watch".into()).spawn(move || {
         let agent = history_agent();
         let mut misses: HashMap<String, u32> = HashMap::new();
+        // (client port, page): the account is looked up once per client run.
+        let mut account: Option<(u16, String)> = None;
+        let mut tick = 0u32;
         loop {
-            if credentials().is_some() {
-                let dir = cfg.read().unwrap().clip_dir();
-                fill_unknown_results(&agent, &dir, &mut misses);
+            let (live_on, dir) = {
+                let s = cfg.read().unwrap();
+                (s.live_stats, s.clip_dir())
+            };
+            let minute = tick % 12 == 0;
+            let client = if live_on || minute { credentials() } else { None };
+            let mut page = None;
+            match &client {
+                Some((port, _)) => {
+                    if live_on && in_game_flow(&agent) {
+                        if account.as_ref().is_none_or(|(p, _)| p != port) {
+                            account = account_page(&agent).map(|url| (*port, url));
+                        }
+                        page = account.as_ref().map(|(_, url)| url.clone());
+                    }
+                    if minute {
+                        fill_unknown_results(&agent, &dir, &mut misses);
+                    }
+                }
+                None => account = None,
             }
-            std::thread::sleep(std::time::Duration::from_secs(60));
+            // Development aid: preview the panel without a game running.
+            if let Ok(test) = std::env::var("LH_LIVE_PAGE") {
+                page = Some(test);
+            }
+            {
+                let mut current = LIVE_PAGE.lock().unwrap();
+                if *current != page {
+                    log::info!("Live game stats page {}", if page.is_some() { "available" } else { "closed" });
+                    *current = page;
+                }
+            }
+            tick = tick.wrapping_add(1);
+            std::thread::sleep(std::time::Duration::from_secs(5));
         }
     });
+}
+
+/// True from champion select until the game ends.
+fn in_game_flow(agent: &ureq::Agent) -> bool {
+    get(agent, "/lol-gameflow/v1/gameflow-phase")
+        .and_then(|v| v.as_str().map(str::to_string))
+        .is_some_and(|phase| matches!(phase.as_str(), "ChampSelect" | "GameStart" | "InProgress" | "Reconnect"))
+}
+
+fn account_page(agent: &ureq::Agent) -> Option<String> {
+    let summoner = get(agent, "/lol-summoner/v1/current-summoner")?;
+    let region = get(agent, "/riotclient/region-locale")?;
+    porofessor_url(
+        region["region"].as_str().unwrap_or(""),
+        summoner["gameName"].as_str().unwrap_or(""),
+        summoner["tagLine"].as_str().unwrap_or(""),
+    )
+}
+
+/// `https://porofessor.gg/live/<server>/<name>-<tag>` for a League Client
+/// region ("EUNE", "LA1", ...) and Riot ID.
+pub fn porofessor_url(region: &str, game_name: &str, tag: &str) -> Option<String> {
+    let server = match region.to_ascii_uppercase().as_str() {
+        "EUW" | "EUW1" => "euw",
+        "EUNE" | "EUN1" => "eune",
+        "NA" | "NA1" => "na",
+        "KR" => "kr",
+        "BR" | "BR1" => "br",
+        "LA1" | "LAN" => "lan",
+        "LA2" | "LAS" => "las",
+        "OC1" | "OCE" => "oce",
+        "TR" | "TR1" => "tr",
+        "RU" => "ru",
+        "JP" | "JP1" => "jp",
+        "SG" | "SG2" => "sg",
+        "PH" | "PH2" => "ph",
+        "TH" | "TH2" => "th",
+        "TW" | "TW2" => "tw",
+        "VN" | "VN2" => "vn",
+        "ME" | "ME1" => "me",
+        _ => return None,
+    };
+    if game_name.trim().is_empty() || tag.trim().is_empty() {
+        return None;
+    }
+    Some(format!("https://porofessor.gg/live/{server}/{}-{}", percent(game_name.trim()), percent(tag.trim())))
+}
+
+fn percent(text: &str) -> String {
+    let mut out = String::new();
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 fn history_agent() -> ureq::Agent {
@@ -291,6 +387,17 @@ mod tests {
         // Too far from any game, or a very different length: no match.
         assert!(find_game(&games, 20_000.0, 1800.0).is_none());
         assert!(find_game(&games, 10_090.0, 600.0).is_none());
+    }
+
+    #[test]
+    fn porofessor_page_uses_server_and_riot_id() {
+        assert_eq!(
+            porofessor_url("EUNE", "Y\u{f8}nko", "BAZ").as_deref(),
+            Some("https://porofessor.gg/live/eune/Y%C3%B8nko-BAZ")
+        );
+        assert_eq!(porofessor_url("LA2", "Two Words", "na1").as_deref(), Some("https://porofessor.gg/live/las/Two%20Words-na1"));
+        assert!(porofessor_url("PBE", "Name", "TAG").is_none());
+        assert!(porofessor_url("EUW", "", "TAG").is_none());
     }
 
     #[test]

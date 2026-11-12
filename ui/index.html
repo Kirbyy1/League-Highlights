@@ -82,6 +82,12 @@ body.collapsed #side { margin-left: -276px; }
 .navs button .i { color: var(--muted); }
 .navs button.on .i { color: var(--accent); }
 .navs button kbd { margin-left: auto; }
+.navs button[hidden] { display: none; }
+.navs button .dot { margin-left: auto; width: 7px; height: 7px; background: var(--accent); }
+/* Live game: the stats site is a native panel laid over this area. */
+#liveView.on { height: 100%; }
+#liveHost { height: 100%; display: grid; place-items: center; text-align: center; color: var(--muted); padding: 20px; }
+#liveHost a { color: var(--accent); }
 .find { margin: 10px 12px 2px; display: flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 9px; padding: 0 9px; color: var(--faint); }
 .find input { border: none; flex: 1; min-width: 0; padding: 7px 0; outline: none; color: var(--text); }
 .pills { display: flex; gap: 2px; padding: 6px 10px 2px; }
@@ -365,6 +371,7 @@ window.addEventListener("error", e => { if (window.ipc) window.ipc.postMessage("
   <div class="brand" data-drag><img src="/favicon.ico" alt=""><b>League Highlights</b><button id="collapse" class="ibtn" title="Hide sidebar (Ctrl+B)" data-icon="sidebar"></button></div>
   <div class="navs">
     <button id="navHome" data-icon="grid">Highlights</button>
+    <button id="navLive" data-icon="chart" hidden>Live game<span class="dot"></span></button>
     <button id="navSettings" data-icon="gear">Settings</button>
     <button id="navStatus" data-icon="pulse">Status</button>
   </div>
@@ -398,6 +405,7 @@ window.addEventListener("error", e => { if (window.ipc) window.ipc.postMessage("
     <section class="view" id="reviewView"><div class="col" id="review"></div></section>
     <section class="view" id="setupView"><div class="col" id="setup"></div></section>
     <section class="view" id="settingsView"><div class="col"><h1>Settings</h1><div class="setwrap"><nav class="cats" id="cats"></nav><div class="sets" id="settingsPage"></div></div></div></section>
+    <section class="view" id="liveView"><div id="liveHost"></div></section>
     <section class="view" id="statusView"><div class="col" id="statusPage"></div></section>
   </div>
 </main>
@@ -432,6 +440,7 @@ const P = {
   grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+  chart: '<path d="M5 20V11M12 20V4M19 20v-6"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
   record: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3" fill="currentColor"/>',
   pause: '<path d="M9 5v14M15 5v14"/>',
@@ -488,7 +497,9 @@ function show(view) {
   $("#navHome").classList.toggle("on", view === "home" || view === "review");
   $("#navSettings").classList.toggle("on", view === "settings");
   $("#navStatus").classList.toggle("on", view === "status");
+  $("#navLive").classList.toggle("on", view === "live");
   $("#scroll").scrollTop = 0;
+  placeLive();
   if (view !== "match" && view !== "review") { state.game = null; renderMatches(); }
   if (view !== "review") state.review = null;
   stopPreview();
@@ -501,6 +512,38 @@ function show(view) {
 $("#navHome").onclick = () => show("home");
 $("#navSettings").onclick = () => show("settings");
 $("#navStatus").onclick = () => show("status");
+$("#navLive").onclick = () => show("live");
+
+/* ---------- live game stats (Porofessor) ----------
+   The site refuses to load in a frame, so the app lays a second native view
+   over the content area. The page only tells it where to sit. */
+function placeLive() {
+  const url = state.livePage;
+  const host = $("#liveHost");
+  if (state.view === "live") {
+    host.innerHTML = !url ? "No game in progress."
+      : window.ipc ? "Loading live game stats…"
+      : `<a href="${esc(url)}" target="_blank" rel="noopener">Open live game stats on Porofessor</a>`;
+  }
+  if (!window.ipc) return;
+  const visible = state.view === "live" && url && !$("#palette").classList.contains("on");
+  if (!visible) { window.ipc.postMessage(url ? "live:hide" : "live:close"); return; }
+  const r = $("#scroll").getBoundingClientRect(), d = window.devicePixelRatio || 1;
+  window.ipc.postMessage(`live:show:${r.left * d},${r.top * d},${r.width * d},${r.height * d}|${url}`);
+}
+function setLivePage(url) {
+  url = url || null;
+  if (url === state.livePage) return;
+  const first = state.livePage === undefined, was = state.livePage;
+  state.livePage = url;
+  $("#navLive").hidden = !url;
+  // Champion select just started: bring the stats up. Game over: step back.
+  if (url && !was && !first) show("live");
+  else if (!url && state.view === "live") show("home");
+  else placeLive();
+}
+window.addEventListener("resize", placeLive);
+$("#side").addEventListener("transitionend", placeLive);
 $("#statPill").onclick = () => show("status");
 const toggleSide = () => document.body.classList.toggle("collapsed");
 $("#collapse").onclick = toggleSide; $("#expand").onclick = toggleSide;
@@ -544,6 +587,7 @@ async function pollStatus() {
       state.lastClip = st.last_clip;
       if (!first) { toast("Highlight saved"); loadClips(); }
     }
+    setLivePage(s.live_page);
     if (s.library_changes !== state.libraryChanges) {
       const first = state.libraryChanges === undefined;
       state.libraryChanges = s.library_changes;
@@ -822,6 +866,7 @@ function openReview(matchId) {
   state.game = game;
   $$(".view").forEach(v => v.classList.toggle("on", v.id === "reviewView"));
   state.view = "review";
+  placeLive();
   $("#detail").innerHTML = "";
   renderMatches();
   renderReview();
@@ -880,7 +925,8 @@ function openGame(game, clip, keepScroll) {
   if (state.view !== "match") {
     state.view = "match";
     $$(".view").forEach(v => v.classList.toggle("on", v.id === "matchView"));
-    ["#navHome", "#navSettings", "#navStatus"].forEach(s => $(s).classList.remove("on"));
+    ["#navHome", "#navSettings", "#navStatus", "#navLive"].forEach(s => $(s).classList.remove("on"));
+    placeLive();
   }
   state.game = game;
   renderMatches();
@@ -1301,7 +1347,8 @@ function renderSettings() {
       ${row("Launch with Windows", "Starts quietly in the notification area.", check("launch_with_windows", s))}
       ${row("Start minimized", "Don't open this window when the app is started manually.", check("start_minimized", s))}
       ${row("Champion art", "Downloads champion icons and splash art from Riot's Data Dragon once, then uses the local copy.", check("champion_art", s))}
-      ${row("Check for updates", "Looks for a newer release on GitHub every few hours and shows a link. Nothing installs automatically.", check("check_for_updates", s))}`],
+      ${row("Check for updates", "Looks for a newer release on GitHub every few hours and shows a link. Nothing installs automatically.", check("check_for_updates", s))}
+      ${row("Live game stats", "Shows Porofessor for your game in champion select and in game. Your Riot ID and server are sent to porofessor.gg.", check("live_stats", s))}`],
     ["Notifications & sharing", `
       ${row("In-game notifications", "A small toast in the corner of the game when a clip is saved. Click-through; never takes focus.", check("overlay_notifications", s))}
       ${row("Notify when a clip is saved", "Windows notification when League isn't open.", check("notify_on_save", s))}
@@ -1397,8 +1444,8 @@ function drawPalette() {
   $$("#palList .pal[data-i]").forEach(el => el.onclick = () => runPalette(+el.dataset.i));
   $("#palList .sel")?.scrollIntoView({ block: "nearest" });
 }
-function openPalette() { $("#palette").classList.add("on"); $("#palInput").value = ""; palIndex = 0; drawPalette(); $("#palInput").focus(); }
-function closePalette() { $("#palette").classList.remove("on"); }
+function openPalette() { $("#palette").classList.add("on"); placeLive(); $("#palInput").value = ""; palIndex = 0; drawPalette(); $("#palInput").focus(); }
+function closePalette() { $("#palette").classList.remove("on"); placeLive(); }
 function runPalette(i) { const c = palItems[i]; closePalette(); if (c) c.run(); }
 $("#palInput").oninput = () => { palIndex = 0; drawPalette(); };
 $("#palette").onclick = e => { if (e.target.id === "palette") closePalette(); };

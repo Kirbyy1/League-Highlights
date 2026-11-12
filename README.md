@@ -42,6 +42,8 @@ Python runtime and no Qt. **[Download the latest release](https://github.com/Kir
   Discord-ready copy that fits your upload limit.
 - **Storage**: usage and free space at a glance, plus optional automatic
   clean-up (clips rated Good are never removed).
+- **Live game stats** (optional): shows your game's Porofessor page inside the
+  app from champion select until the game ends, using your server and Riot ID.
 - **Setup check**: verifies FFmpeg, encoder, capture, League's window mode,
   audio, clip folder and disk space, with one-click fixes.
 
@@ -111,7 +113,10 @@ Gameplay never leaves the PC. The app contacts only:
 - Riot's Data Dragon CDN for champion icons and splash art, once per champion
   (Settings → App → Champion art);
 - GitHub's releases API every few hours to show an update link
-  (Settings → App → Check for updates).
+  (Settings → App → Check for updates);
+- porofessor.gg, only if you turn on Settings → App → Live game stats: the app
+  then opens your live game page there, which includes your Riot ID and server.
+  Off by default.
 
 ## Files
 
