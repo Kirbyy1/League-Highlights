@@ -26,13 +26,18 @@ Python runtime and no Qt. **[Download the latest release](https://github.com/Kir
   or AMF (zero-copy on NVIDIA at native resolution), WASAPI system and
   microphone audio, and low-priority capture with a disk-space guard.
 - **Smart Highlights V2**: fight grouping, adaptive pre/post-roll, duplicate
-  suppression, explainable scores, and ratings that tune future clips.
+  suppression and explainable scores. It also keeps shutdowns, first blood,
+  epic-monster steals and the winning moment, limits routine clips per match,
+  and learns from your ratings.
 - **In-game toast**: a small click-through notice over the game when a clip
   is saved (or fails).
 - **Post-match review**: when a game ends, step through its new clips and keep,
   rate or delete each with one key.
 - **Library**: match-grouped highlights with champion art, a custom player
   with event markers, lossless trim and Smart Trim, and multi-select.
+- **Editor**: trim a clip, add background music from your own files, balance
+  game and music volume with fades, and save a new clip without re-encoding
+  the video.
 - **Sharing**: copy a clip to the clipboard (paste into Discord), or make a
   Discord-ready copy that fits your upload limit.
 - **Storage**: usage and free space at a glance, plus optional automatic
