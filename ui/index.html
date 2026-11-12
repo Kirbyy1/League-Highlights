@@ -16,9 +16,11 @@
   --text: #ecebe7;
   --muted: #9b9a95;
   --faint: #6c6b67;
-  --accent: #c8aa6e;
-  --accent-text: #1a1508;
-  --good: #0ac8b9;
+  --accent: #5ed082;
+  --accent-2: #a8c858;
+  --accent-text: #0b1a10;
+  --good: #5ed082;
+  --win: #4cb4ff;
   --bad: #e84057;
   --warn: #e0a83a;
   --track: #3a3a40;
@@ -31,8 +33,8 @@
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #fafaf8; --side: #f1f0ec; --raise: #ffffff; --hover: #e9e8e3; --active: #e1e0da; --line: #e3e2dc;
-    --text: #1c1c1e; --muted: #67665f; --faint: #9a9990; --accent: #9a7a3a; --accent-text: #fff;
-    --good: #078c82; --bad: #c62f45; --warn: #a87a1c; --track: #d5d4cc;
+    --text: #1c1c1e; --muted: #67665f; --faint: #9a9990; --accent: #1f8f4d; --accent-2: #6f9a1c; --accent-text: #fff;
+    --good: #1f8f4d; --win: #1f7fd1; --bad: #c62f45; --warn: #a87a1c; --track: #d5d4cc;
     --shadow: 0 16px 48px rgba(40, 35, 20, .18);
     color-scheme: light;
   }
@@ -53,8 +55,8 @@ button, input, select { font: inherit; color: inherit; }
 button { background: none; border: none; border-radius: 8px; padding: 6px 10px; cursor: pointer; color: var(--muted); transition: background .12s, color .12s, opacity .12s; display: inline-flex; align-items: center; gap: 7px; }
 button:hover { background: var(--hover); color: var(--text); }
 button.on { color: var(--text); background: var(--active); }
-button.primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
-button.primary:hover { filter: brightness(1.08); background: var(--accent); color: var(--accent-text); }
+button.primary { background: linear-gradient(100deg, var(--accent-2), var(--accent) 70%); color: var(--accent-text); font-weight: 600; }
+button.primary:hover { filter: brightness(1.08); background: linear-gradient(100deg, var(--accent-2), var(--accent) 70%); color: var(--accent-text); }
 button:disabled { opacity: .35; cursor: default; pointer-events: none; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 input[type=text], select { background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
@@ -92,12 +94,12 @@ body.collapsed #side { margin-left: -276px; }
 .match .meta { flex: 1; min-width: 0; line-height: 1.3; }
 .match .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 550; }
 .match .sub { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.match .sub .Victory { color: var(--good); }
+.match .sub .Victory { color: var(--win); }
 .match .sub .Defeat { color: var(--bad); }
 .match .n { color: var(--faint); font-size: 11.5px; }
 .cicon { position: relative; width: 34px; height: 34px; border-radius: 50%; flex: none; overflow: hidden; background: var(--track); color: var(--muted); font-size: 13px; font-weight: 600; display: grid; place-items: center; box-shadow: 0 0 0 2px var(--side), 0 0 0 3.5px var(--ring, var(--line)); }
 .cicon img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scale(1.12); }
-.cicon.Victory { --ring: var(--good); }
+.cicon.Victory { --ring: var(--win); }
 .cicon.Defeat { --ring: var(--bad); }
 .cicon.sm { width: 20px; height: 20px; font-size: 10px; box-shadow: none; }
 .foot { border-top: 1px solid var(--line); padding: 10px 10px 12px; display: flex; flex-direction: column; gap: 8px; }
@@ -190,7 +192,7 @@ body.selecting #selbar { display: flex; }
 .chk:first-child { border-top: 1px solid var(--line); }
 .chk .st { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none; }
 .chk .st svg { width: 13px; height: 13px; stroke-width: 2.4; }
-.chk .st.ok { background: rgba(10, 200, 185, .15); color: var(--good); }
+.chk .st.ok { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
 .chk .st.warn { background: rgba(224, 168, 58, .16); color: var(--warn); }
 .chk .st.fail { background: rgba(232, 64, 87, .16); color: var(--bad); }
 .chk .st.info { background: var(--hover); color: var(--muted); }
@@ -252,7 +254,7 @@ button.outline.on { border-color: var(--accent); color: var(--accent); backgroun
 .hero::before { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(8, 8, 10, 0) 25%, rgba(8, 8, 10, .88) 100%), linear-gradient(90deg, rgba(8, 8, 10, .6), transparent 70%); }
 .hero > * { position: relative; }
 .hero .outcome { font: 700 11.5px var(--sans); letter-spacing: .2em; text-transform: uppercase; }
-.outcome.Victory { color: var(--good); }
+.outcome.Victory { color: var(--win); }
 .outcome.Defeat { color: var(--bad); }
 .hero h1 { font-size: 40px; color: #f5f2ea; text-shadow: 0 2px 18px rgba(0, 0, 0, .5); margin: 2px 0 10px; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -284,7 +286,7 @@ button.outline.on { border-color: var(--accent); color: var(--accent); backgroun
 .speed { font: 12px var(--mono); min-width: 40px; justify-content: center; }
 .scrub { position: relative; height: 34px; margin: 4px 0 0; cursor: pointer; user-select: none; touch-action: none; }
 .scrub .rail { position: absolute; left: 0; right: 0; top: 15px; height: 4px; border-radius: 2px; background: var(--track); }
-.scrub .trim { position: absolute; top: 15px; height: 4px; background: rgba(200, 170, 110, .35); }
+.scrub .trim { position: absolute; top: 15px; height: 4px; background: color-mix(in srgb, var(--accent) 35%, transparent); }
 .scrub .played { position: absolute; left: 0; top: 15px; height: 4px; border-radius: 2px; background: var(--accent); pointer-events: none; }
 .scrub .head { position: absolute; top: 10px; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: var(--text); box-shadow: 0 1px 6px rgba(0, 0, 0, .4); pointer-events: none; transition: transform .1s; }
 .scrub:hover .head { transform: scale(1.15); }
@@ -475,7 +477,7 @@ function toast(text, ok = true) {
 
 const EVENT_COLORS = {
   CHAMPION_KILL: "#e84057", MULTIKILL: "#f0904a", ASSIST: "#5aa6e8", PLAYER_DEATH: "#8a8a86",
-  ACE: "#e8c34a", DRAGON: "#a58bd6", DRAGON_STEAL: "#c4a6f5", BARON: "#9b6be0", BARON_STEAL: "#b98cff", MANUAL_TRIGGER: "#c8aa6e", OBJECTIVE_STEAL: "#b98cff", VICTORY: "#0ac8b9",
+  ACE: "#e8c34a", DRAGON: "#a58bd6", DRAGON_STEAL: "#c4a6f5", BARON: "#9b6be0", BARON_STEAL: "#b98cff", MANUAL_TRIGGER: "#5ed082", OBJECTIVE_STEAL: "#b98cff", VICTORY: "#4cb4ff",
 };
 const state = { games: [], clips: [], game: null, clip: null, view: "home", lastClip: null, settings: null, devices: null, trim: [0, 0], result: "", hotkey: "F8", sel: new Set(), review: null, storage: null };
 

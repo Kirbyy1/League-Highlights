@@ -93,9 +93,9 @@ unsafe extern "system" fn proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
 
             let content = CONTENT.lock().unwrap();
             if let Some(content) = content.as_ref() {
-                // Accent bar: gold for saved, red for errors, grey for info.
+                // Accent bar: logo green for saved, red for errors, grey for info.
                 let accent = match content.tone {
-                    Tone::Saved => 0x006e_aac8,
+                    Tone::Saved => 0x0082_d05e,
                     Tone::Error => 0x0057_40e8,
                     Tone::Info => 0x0095_9a9b,
                 };
