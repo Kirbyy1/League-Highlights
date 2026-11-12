@@ -75,7 +75,8 @@ if (-not $NoInstaller) {
 }
 
 $sums = $outputs | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower(), (Split-Path $_ -Leaf) }
-$sums | Set-Content (Join-Path $Dist "SHA256SUMS.txt") -Encoding ascii
+# LF line endings so `sha256sum -c` works on any platform.
+[IO.File]::WriteAllText((Join-Path $Dist "SHA256SUMS.txt"), (($sums -join "`n") + "`n"), [Text.Encoding]::ASCII)
 Write-Host ""
 $outputs | ForEach-Object { "{0,-44} {1,8:N1} MB" -f (Split-Path $_ -Leaf), ((Get-Item $_).Length / 1MB) }
 Write-Host "Checksums in dist\SHA256SUMS.txt" -ForegroundColor Green
