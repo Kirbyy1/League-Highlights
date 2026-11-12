@@ -1,12 +1,24 @@
-# League Highlights 2 (Rust)
+# League Highlights
 
-A Rust rewrite of [League Highlights](https://github.com/Kirbyy1/League-Highlights):
-a privacy-first League of Legends highlight recorder for Windows. It keeps a
-rolling buffer while a match runs, saves clips on a global shortcut, and lets
-Smart Highlights keep kills, multikills, outnumbered plays, support impact,
-low-health survivals and objective steals automatically.
+A lightweight, privacy-first League of Legends highlight recorder for Windows.
+It keeps a rolling buffer while a match runs, saves clips on a global
+shortcut, and lets Smart Highlights keep kills, multikills, outnumbered plays,
+support impact, low-health survivals and objective steals automatically.
 
-One ~2 MB executable plus `ffmpeg.exe`. No Python runtime, no Qt, no ffprobe.
+Version 2 is a rewrite in Rust: one ~2 MB executable plus `ffmpeg.exe`, with no
+Python runtime and no Qt. **[Download the latest release](https://github.com/Kirbyy1/League-Highlights/releases/latest)**
+
+![Highlights home with stats, a post-match review prompt and clip tiles](docs/images/home.png)
+
+## Screenshots
+
+| Match page and player | Post-match review |
+|---|---|
+| ![Match page with match timeline, custom player and event markers](docs/images/match.png) | ![Review view stepping through a match's new clips](docs/images/review.png) |
+
+![Settings with a category list and flat setting rows](docs/images/settings.png)
+
+<sub>Screenshots use a demo library with placeholder footage.</sub>
 
 ## Features
 

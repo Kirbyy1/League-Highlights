@@ -1201,6 +1201,15 @@ api("/api/settings").then(s => { state.settings = s; setHotkey(s.hotkey_display)
   checkUpdate();
   if (state.settings && !state.settings.setup_seen && location.hash !== "#uitest") show("setup");
   if (location.hash === "#review") { history.replaceState(null, "", "/"); openReview(); }
+  // Developer switch for documentation screenshots: #view=home|match|review|settings[&chrome]
+  const shot = new URLSearchParams(location.hash.slice(1));
+  if (shot.has("view")) {
+    if (shot.has("chrome")) document.body.classList.add("native");
+    const v = shot.get("view");
+    if (v === "match") openGame(state.games[0]);
+    else if (v === "review") openReview();
+    else show(v);
+  }
   if (location.hash === "#uitest" && window.ipc) {
     // Developer check (LH_UI_TEST): play the first clip and report playback.
     try {
