@@ -119,7 +119,11 @@ pub fn finalize_match(dir: &Path, ctx: &MatchContext, result: &str) {
         fill("champion_name", &ctx.champion_name);
         fill("game_mode", &ctx.game_mode);
         meta.insert("map_name".into(), json!(ctx.map_name));
-        meta.insert("match_result".into(), json!(result));
+        // Never replace a result filled in from match history with UNKNOWN.
+        let known = meta.get("match_result").and_then(Value::as_str).is_some_and(|r| r == "WIN" || r == "LOSE");
+        if !(known && result.eq_ignore_ascii_case("UNKNOWN")) {
+            meta.insert("match_result".into(), json!(result));
+        }
         meta.insert("match_started_at".into(), json!(ctx.started_at));
         meta.insert("match_ended_at".into(), json!(ended_at));
         meta.insert("match_kills".into(), json!(ctx.kills));
@@ -137,6 +141,50 @@ pub fn finalize_match(dir: &Path, ctx: &MatchContext, result: &str) {
         }
     }
     log::info!("Finalized game group {} with {changed} clip(s)", ctx.match_id);
+}
+
+/// Clip groups whose result is unknown: (match id, start, duration), one each.
+pub fn unknown_results(dir: &Path) -> Vec<(String, f64, f64)> {
+    let mut out: Vec<(String, f64, f64)> = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else { return out };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let meta = read_meta(&path);
+        let id = meta.get("match_id").and_then(Value::as_str).unwrap_or("");
+        let result = meta.get("match_result").and_then(Value::as_str).unwrap_or("");
+        let started = meta.get("match_started_at").and_then(Value::as_f64).unwrap_or(0.0);
+        if id.is_empty() || started <= 0.0 || !result.eq_ignore_ascii_case("UNKNOWN") || out.iter().any(|(m, ..)| m == id) {
+            continue;
+        }
+        let duration = meta.get("match_duration_seconds").and_then(Value::as_f64).unwrap_or(0.0);
+        out.push((id.to_string(), started, duration));
+    }
+    out
+}
+
+/// Set the result of every clip in a match whose result is still unknown.
+pub fn set_match_result(dir: &Path, match_id: &str, result: &str) -> usize {
+    let mut changed = 0;
+    let Ok(entries) = fs::read_dir(dir) else { return 0 };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let mut meta = read_meta(&path);
+        let same = meta.get("match_id").and_then(Value::as_str) == Some(match_id);
+        let unknown = meta.get("match_result").and_then(Value::as_str).is_none_or(|r| r.eq_ignore_ascii_case("UNKNOWN") || r.is_empty());
+        if same && unknown {
+            meta.insert("match_result".into(), json!(result));
+            if write_meta(&path, &meta).is_ok() {
+                changed += 1;
+            }
+        }
+    }
+    changed
 }
 
 pub fn set_rating(path: &Path, rating: &str) -> Result<(), String> {

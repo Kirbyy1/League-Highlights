@@ -127,6 +127,8 @@ impl Controller {
     }
 
     pub fn run(mut self, rx: Receiver<Cmd>) {
+        // Matches saved without a result (older versions, or a missed GameEnd).
+        lcu::fill_unknown_results_later(self.cfg.read().unwrap().clip_dir());
         if self.ff.is_none() {
             self.set_state(
                 "ERROR",
@@ -172,6 +174,9 @@ impl Controller {
             Cmd::MatchEnded(ctx, result) => {
                 let dir = self.cfg.read().unwrap().clip_dir();
                 library::finalize_match(&dir, &ctx, &result);
+                if result != "WIN" && result != "LOSE" {
+                    lcu::fill_unknown_results_later(dir.clone());
+                }
                 // Prompt a quick post-match review of this game's new clips.
                 let fresh = library::unreviewed_in_match(&dir, &ctx.match_id);
                 if fresh > 0 {

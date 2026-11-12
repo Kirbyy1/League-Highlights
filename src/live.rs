@@ -349,18 +349,29 @@ impl Detector {
 
     fn tick(&mut self, agent: &ureq::Agent) -> Result<(), String> {
         let instant = Instant::now();
+        let mut refreshed = Ok(());
         if instant >= self.next_full_refresh || self.active_aliases.is_empty() {
-            self.refresh_live_state(agent, true)?;
-            self.next_full_refresh = instant + Duration::from_secs(3);
-            self.next_active_refresh = instant + Duration::from_secs(1);
+            refreshed = self.refresh_live_state(agent, true);
+            if refreshed.is_ok() {
+                self.next_full_refresh = instant + Duration::from_secs(3);
+                self.next_active_refresh = instant + Duration::from_secs(1);
+            }
         } else if instant >= self.next_active_refresh {
-            self.refresh_live_state(agent, false)?;
-            self.next_active_refresh = instant + Duration::from_secs(1);
+            refreshed = self.refresh_live_state(agent, false);
+            if refreshed.is_ok() {
+                self.next_active_refresh = instant + Duration::from_secs(1);
+            }
+        }
+        // Once we know who the player is, keep reading events even if the
+        // player endpoints stop answering: at the end of a game they can fail
+        // while /eventdata still carries GameEnd with the result.
+        if refreshed.is_err() && self.active_aliases.is_empty() {
+            return refreshed;
         }
         let payload = get_json(agent, "/eventdata")?;
         let events = list(field(&payload, "Events"));
         self.consume_events(&events);
-        Ok(())
+        refreshed
     }
 
     fn refresh_live_state(&mut self, agent: &ureq::Agent, full: bool) -> Result<(), String> {

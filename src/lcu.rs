@@ -1,7 +1,9 @@
 //! Queue filter ("ranked only", "skip ARAM", ...) using the League Client API.
 //!
 //! The client's lockfile (next to LeagueClientUx.exe) holds the local port and
-//! password. Only `/lol-gameflow/v1/session` is read, once per game window.
+//! password. `/lol-gameflow/v1/session` is read once per game window, and the
+//! player's own recent match history is read after a game whose result the
+//! Live Client API did not report, to fill in Win or Loss.
 
 use std::path::{Path, PathBuf};
 
@@ -53,17 +55,21 @@ fn credentials() -> Option<(u16, String)> {
     None
 }
 
-/// Read the current queue from the League Client, if it is running.
-pub fn current_queue(agent: &ureq::Agent) -> Option<QueueInfo> {
+fn get(agent: &ureq::Agent, path: &str) -> Option<Value> {
     let (port, password) = credentials()?;
     let auth = format!("Basic {}", base64(format!("riot:{password}").as_bytes()));
     let response = agent
-        .get(&format!("https://127.0.0.1:{port}/lol-gameflow/v1/session"))
+        .get(&format!("https://127.0.0.1:{port}{path}"))
         .set("Authorization", &auth)
         .set("Accept", "application/json")
         .call()
         .ok()?;
-    let session: Value = serde_json::from_str(&response.into_string().ok()?).ok()?;
+    serde_json::from_str(&response.into_string().ok()?).ok()
+}
+
+/// Read the current queue from the League Client, if it is running.
+pub fn current_queue(agent: &ureq::Agent) -> Option<QueueInfo> {
+    let session = get(agent, "/lol-gameflow/v1/session")?;
     let game_data = &session["gameData"];
     let queue = &game_data["queue"];
     let queue_id = queue["id"].as_i64().or_else(|| game_data["queueId"].as_i64());
@@ -77,6 +83,90 @@ pub fn current_queue(agent: &ureq::Agent) -> Option<QueueInfo> {
         game_mode,
         is_custom: game_data["isCustomGame"].as_bool().unwrap_or(false),
     })
+}
+
+/// A finished game from the player's match history.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PastGame {
+    /// Unix seconds when the game was created (before loading).
+    pub created: f64,
+    pub duration: f64,
+    pub win: bool,
+}
+
+/// Fill in unknown results in the background, retrying for a few minutes:
+/// the client adds a game to its history shortly after the end-of-game screen.
+pub fn fill_unknown_results_later(dir: PathBuf) {
+    let _ = std::thread::Builder::new().name("match-results".into()).spawn(move || {
+        let mut builder = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_millis(400))
+            .timeout(std::time::Duration::from_secs(10));
+        if let Ok(tls) = native_tls::TlsConnector::builder()
+            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_hostnames(true)
+            .build()
+        {
+            builder = builder.tls_connector(std::sync::Arc::new(tls));
+        }
+        let agent = builder.build();
+        for wait in [3, 20, 30, 60, 60, 120] {
+            std::thread::sleep(std::time::Duration::from_secs(wait));
+            fill_unknown_results(&agent, &dir);
+            if crate::library::unknown_results(&dir).is_empty() {
+                break;
+            }
+        }
+    });
+}
+
+/// The current player's most recent games, newest first.
+pub fn recent_games(agent: &ureq::Agent, count: usize) -> Option<Vec<PastGame>> {
+    let path = format!("/lol-match-history/v1/products/lol/current-summoner/matches?begIndex=0&endIndex={count}");
+    let data = get(agent, &path)?;
+    let games = data["games"]["games"].as_array()?;
+    Some(
+        games
+            .iter()
+            .filter_map(|g| {
+                let created = g["gameCreation"].as_f64()? / 1000.0;
+                let win = g["participants"].get(0)?["stats"]["win"].as_bool()?;
+                Some(PastGame { created, duration: g["gameDuration"].as_f64().unwrap_or(0.0), win })
+            })
+            .collect(),
+    )
+}
+
+/// The history game that is the match whose clock started at `started`
+/// (Live Client time) and lasted `duration` seconds. A game is created before
+/// the loading screen, so its creation time is up to ten minutes earlier.
+pub fn find_game(games: &[PastGame], started: f64, duration: f64) -> Option<&PastGame> {
+    games
+        .iter()
+        .filter(|g| g.created <= started + 60.0 && started - g.created <= 600.0)
+        .filter(|g| duration <= 0.0 || g.duration <= 0.0 || (g.duration - duration).abs() <= 180.0)
+        .min_by(|a, b| (started - a.created).abs().total_cmp(&(started - b.created).abs()))
+}
+
+/// Fill in Win or Loss for clip groups saved with an unknown result, from the
+/// League Client's match history. Returns how many groups were updated, or
+/// None when the client could not be reached.
+pub fn fill_unknown_results(agent: &ureq::Agent, dir: &Path) -> Option<usize> {
+    let unknown = crate::library::unknown_results(dir);
+    if unknown.is_empty() {
+        return Some(0);
+    }
+    let games = recent_games(agent, 20)?;
+    let mut updated = 0;
+    for (match_id, started, duration) in unknown {
+        if let Some(game) = find_game(&games, started, duration) {
+            let result = if game.win { "WIN" } else { "LOSE" };
+            if crate::library::set_match_result(dir, &match_id, result) > 0 {
+                log::info!("Match result from the League Client: {match_id} ({result})");
+                updated += 1;
+            }
+        }
+    }
+    Some(updated)
 }
 
 pub fn queue_label(queue_id: Option<i64>, mode: &str) -> String {
@@ -157,6 +247,20 @@ mod tests {
         assert!(!d.allowed && d.known);
         let info = QueueInfo { queue_id: Some(420), ..Default::default() };
         assert!(decide(&settings("ranked_only"), Some(&info), "").allowed);
+    }
+
+    #[test]
+    fn history_game_matches_by_start_and_length() {
+        let games = vec![
+            PastGame { created: 10_000.0, duration: 1800.0, win: true },
+            PastGame { created: 7_000.0, duration: 1500.0, win: false },
+        ];
+        // Clock started 90 s after creation, same length: the first game.
+        assert_eq!(find_game(&games, 10_090.0, 1790.0).map(|g| g.win), Some(true));
+        assert_eq!(find_game(&games, 7_100.0, 1490.0).map(|g| g.win), Some(false));
+        // Too far from any game, or a very different length: no match.
+        assert!(find_game(&games, 20_000.0, 1800.0).is_none());
+        assert!(find_game(&games, 10_090.0, 600.0).is_none());
     }
 
     #[test]

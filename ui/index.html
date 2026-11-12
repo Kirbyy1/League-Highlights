@@ -654,8 +654,11 @@ function renderMatches() {
     const b = bucket(g.started);
     const head = b !== last ? `<div class="group">${b}</div>` : "";
     last = b;
-    const sub = [g.result ? `<span class="${g.result}">${g.result}</span>` : "", g.kda, !g.result && !g.kda ? clock(g.started) : ""].filter(Boolean).join(" · ");
-    return `${head}<div class="match ${state.game && state.game.id === g.id ? "sel" : ""}" data-id="${esc(g.id)}" title="${esc(dateText(g.started))}">
+    // Start time first: it is what tells same-champion games apart.
+    const mode = g.mode && String(g.mode).toUpperCase() !== "CLASSIC" ? modeName(g.mode) : "";
+    const sub = [clock(g.started), g.result ? `<span class="${g.result}">${g.result}</span>` : "", g.kda, esc(mode)].filter(Boolean).join(" · ");
+    const tip = [dateText(g.started), g.result, g.mode && modeName(g.mode), g.duration && mmss(g.duration), g.kda && `KDA ${g.kda}`, `${g.clips.length} clip${g.clips.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
+    return `${head}<div class="match ${state.game && state.game.id === g.id ? "sel" : ""}" data-id="${esc(g.id)}" title="${esc(tip)}">
       ${avatar(g)}<div class="meta"><div class="name">${esc(gameName(g))}</div><div class="sub">${sub}</div></div><span class="mono n">${g.clips.length}</span></div>`;
   }).join("") || `<div class="group">${state.games.length ? "No matches found" : "No matches yet"}</div>`;
   $$("#matchList .match").forEach(el => el.onclick = () => openGame(state.games.find(g => g.id === el.dataset.id)));
