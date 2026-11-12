@@ -1,0 +1,1144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>League Highlights</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+:root {
+  --bg: #1d1d1f;
+  --side: #161618;
+  --raise: #232326;
+  --hover: #2a2a2e;
+  --active: #323236;
+  --line: #2e2e33;
+  --text: #ecebe7;
+  --muted: #9b9a95;
+  --faint: #6c6b67;
+  --accent: #c8aa6e;
+  --accent-text: #1a1508;
+  --good: #0ac8b9;
+  --bad: #e84057;
+  --warn: #e0a83a;
+  --track: #3a3a40;
+  --shadow: 0 16px 48px rgba(0, 0, 0, .5);
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #fafaf8; --side: #f1f0ec; --raise: #ffffff; --hover: #e9e8e3; --active: #e1e0da; --line: #e3e2dc;
+    --text: #1c1c1e; --muted: #67665f; --faint: #9a9990; --accent: #9a7a3a; --accent-text: #fff;
+    --good: #078c82; --bad: #c62f45; --warn: #a87a1c; --track: #d5d4cc;
+    --shadow: 0 16px 48px rgba(40, 35, 20, .18);
+    color-scheme: light;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 13.5px/1.5 var(--sans); display: flex; overflow: hidden; -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+button { background: none; border: none; border-radius: 8px; padding: 6px 10px; cursor: pointer; color: var(--muted); transition: background .12s, color .12s, opacity .12s; display: inline-flex; align-items: center; gap: 7px; }
+button:hover { background: var(--hover); color: var(--text); }
+button.on { color: var(--text); background: var(--active); }
+button.primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+button.primary:hover { filter: brightness(1.08); background: var(--accent); color: var(--accent-text); }
+button:disabled { opacity: .35; cursor: default; pointer-events: none; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+input[type=text], select { background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+select option { background: var(--side); }
+input[type=range], input[type=checkbox] { accent-color: var(--accent); }
+input[type=checkbox] { width: 15px; height: 15px; }
+kbd { font: 11px var(--mono); color: var(--faint); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+.mono { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; display: block; flex: none; }
+svg.fill { fill: currentColor; stroke: none; }
+.i { width: 16px; height: 16px; }
+.ibtn { width: 32px; height: 32px; padding: 0; justify-content: center; }
+
+/* ---------- sidebar ---------- */
+#side { width: 276px; flex: none; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; transition: margin-left .18s ease; }
+body.collapsed #side { margin-left: -276px; }
+.brand { display: flex; align-items: center; gap: 9px; height: 44px; flex: none; padding: 0 6px 0 16px; user-select: none; }
+.brand img { width: 18px; height: 18px; }
+.brand b { flex: 1; font-weight: 600; font-family: var(--display); letter-spacing: .01em; }
+.navs { padding: 4px 8px 2px; display: flex; flex-direction: column; gap: 1px; }
+.navs button { width: 100%; padding: 7px 10px; color: var(--text); }
+.navs button .i { color: var(--muted); }
+.navs button.on .i { color: var(--accent); }
+.navs button kbd { margin-left: auto; }
+.find { margin: 10px 12px 2px; display: flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 9px; padding: 0 9px; color: var(--faint); }
+.find input { border: none; flex: 1; min-width: 0; padding: 7px 0; outline: none; color: var(--text); }
+.pills { display: flex; gap: 2px; padding: 6px 10px 2px; }
+.pills button { font-size: 12px; padding: 2px 10px; border-radius: 99px; }
+#matchList { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+.group { font-size: 11.5px; color: var(--faint); padding: 14px 10px 5px; font-weight: 500; }
+.match { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 9px; cursor: pointer; }
+.match:hover { background: var(--hover); }
+.match.sel { background: var(--active); }
+.match .meta { flex: 1; min-width: 0; line-height: 1.3; }
+.match .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 550; }
+.match .sub { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.match .sub .Victory { color: var(--good); }
+.match .sub .Defeat { color: var(--bad); }
+.match .n { color: var(--faint); font-size: 11.5px; }
+.cicon { position: relative; width: 34px; height: 34px; border-radius: 50%; flex: none; overflow: hidden; background: var(--track); color: var(--muted); font-size: 13px; font-weight: 600; display: grid; place-items: center; box-shadow: 0 0 0 2px var(--side), 0 0 0 3.5px var(--ring, var(--line)); }
+.cicon img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scale(1.12); }
+.cicon.Victory { --ring: var(--good); }
+.cicon.Defeat { --ring: var(--bad); }
+.cicon.sm { width: 20px; height: 20px; font-size: 10px; box-shadow: none; }
+.foot { border-top: 1px solid var(--line); padding: 10px 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.pill { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 9px; cursor: pointer; }
+.pill:hover { background: var(--hover); }
+.pill .txt { flex: 1; min-width: 0; line-height: 1.3; }
+.pill .st { font-weight: 550; }
+.pill .det { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; }
+.dot.rec { background: var(--bad); box-shadow: 0 0 0 4px rgba(232, 64, 87, .18); animation: pulse 1.8s infinite; }
+.dot.ok { background: var(--good); }
+.dot.warn { background: var(--warn); }
+@keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(232, 64, 87, 0); } }
+.foot .row2 { display: flex; gap: 6px; }
+.foot .row2 .primary { flex: 1; justify-content: center; padding: 8px 10px; }
+.foot .row2 .primary kbd { color: inherit; border-color: rgba(0, 0, 0, .2); opacity: .7; }
+
+/* ---------- main + title bar ---------- */
+#main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.top { height: 44px; flex: none; display: flex; align-items: center; padding-left: 8px; user-select: none; }
+.top .grow { flex: 1; align-self: stretch; }
+#expand { display: none; }
+body.collapsed #expand { display: inline-flex; }
+.wctl { display: none; align-self: stretch; }
+body.native .wctl { display: flex; }
+.wctl button { width: 46px; border-radius: 0; padding: 0; color: var(--text); justify-content: center; }
+.wctl svg { width: 10px; height: 10px; stroke-width: 1; }
+.wctl button.close:hover { background: #c42b1c; color: #fff; }
+#resizeTop { position: fixed; left: 0; right: 0; top: 0; height: 4px; z-index: 50; cursor: ns-resize; display: none; }
+body.native:not(.maximized) #resizeTop { display: block; }
+#scroll { flex: 1; overflow-y: auto; position: relative; scrollbar-gutter: stable; }
+.col { max-width: 1040px; margin: 0 auto; padding: 6px 36px 80px; animation: fade .16s ease; }
+@keyframes fade { from { opacity: 0; transform: translateY(4px); } }
+.view { display: none; }
+.view.on { display: block; }
+h1 { font: 600 26px/1.2 var(--display); margin: 0; letter-spacing: -.01em; }
+h3 { font: 600 15px/1.3 var(--display); margin: 34px 0 12px; display: flex; align-items: baseline; gap: 10px; }
+h3 .muted { font: 400 12.5px var(--sans); }
+
+/* ---------- home ---------- */
+.stats { display: flex; gap: 48px; margin: 22px 0 6px; flex-wrap: wrap; }
+.stats div b { display: block; font: 600 26px/1.1 var(--display); }
+.stats div span { color: var(--faint); font-size: 12px; }
+.empty { text-align: center; padding: 18vh 20px; color: var(--muted); }
+.empty h1 { color: var(--text); margin-bottom: 8px; }
+
+/* ---------- tiles ---------- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(216px, 1fr)); gap: 16px 14px; }
+.tile { display: block; padding: 0; text-align: left; color: var(--text); border-radius: 12px; background: none; }
+.tile:hover { background: none; }
+.tile .th { position: relative; aspect-ratio: 16 / 9; border-radius: 11px; overflow: hidden; background: var(--raise); box-shadow: 0 0 0 1px var(--line); }
+.tile .th img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .25s ease; }
+.tile:hover .th img { transform: scale(1.04); }
+.tile.sel .th { box-shadow: 0 0 0 2px var(--accent); }
+.tile .badge { position: absolute; right: 7px; bottom: 7px; background: rgba(0, 0, 0, .72); color: #fff; font: 11px var(--mono); padding: 1px 6px; border-radius: 5px; }
+.tile .score { position: absolute; left: 7px; top: 7px; background: rgba(0, 0, 0, .6); color: var(--accent); font: 600 11px var(--mono); padding: 1px 6px; border-radius: 5px; }
+.tile .play { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; transition: opacity .15s; background: rgba(0, 0, 0, .25); color: #fff; }
+.tile:hover .play { opacity: 1; }
+.tile .play svg { width: 34px; height: 34px; }
+.tile .cap { display: flex; gap: 8px; align-items: center; padding: 8px 2px 0; }
+.tile .cap .t { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .cap .s { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .cap > div { min-width: 0; flex: 1; }
+.rdot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+.rdot.good { background: var(--good); }
+.rdot.bad { background: var(--bad); }
+
+.tile .new { position: absolute; right: 7px; top: 7px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px rgba(0, 0, 0, .45); }
+.tile .pick { position: absolute; left: 7px; bottom: 7px; width: 20px; height: 20px; border-radius: 6px; background: rgba(0, 0, 0, .55); border: 1.5px solid rgba(255, 255, 255, .7); display: none; place-items: center; color: #fff; }
+.tile .pick svg { width: 13px; height: 13px; stroke-width: 2.5; }
+body.selecting .tile .pick { display: grid; }
+.tile.picked .th { box-shadow: 0 0 0 2px var(--accent); }
+.tile.picked .pick { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+#selbar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: none; align-items: center; gap: 4px; background: var(--raise); border: 1px solid var(--line); border-radius: 12px; padding: 5px 6px 5px 14px; box-shadow: var(--shadow); z-index: 15; }
+body.selecting #selbar { display: flex; }
+#selbar .count { font-weight: 600; margin-right: 8px; }
+#selbar .danger { color: var(--bad); }
+.notice { display: flex; align-items: center; gap: 14px; padding: 14px 0; margin-top: 22px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.notice .txt { flex: 1; min-width: 0; }
+.notice .txt b { font-weight: 600; }
+.notice .txt div { color: var(--muted); font-size: 12.5px; }
+.storage { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+.storage .bar { width: 160px; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
+.storage .bar i { display: block; height: 100%; background: var(--accent); }
+.storage button { font-size: 12.5px; padding: 3px 8px; }
+
+/* ---------- review ---------- */
+.rvhead { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.rvhead .muted { font-family: var(--mono); font-size: 12px; }
+.rvprog { display: flex; gap: 4px; margin-top: 12px; }
+.rvprog i { flex: 1; height: 3px; border-radius: 2px; background: var(--track); }
+.rvprog i.done { background: var(--accent); }
+.rvprog i.cur { background: var(--text); }
+.rvacts { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.rvacts button { padding: 9px 16px; border: 1px solid var(--line); color: var(--text); }
+.rvacts button kbd { margin-left: 2px; }
+.rvacts .primary { border-color: var(--accent); }
+.rvacts .danger:hover { color: var(--bad); border-color: var(--bad); background: none; }
+.rvacts .grow { flex: 1; }
+
+/* ---------- match hero ---------- */
+.hero { position: relative; height: 290px; border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: 26px 28px 18px; background: var(--raise) var(--art) center 20% / cover no-repeat; margin-top: 4px; }
+.hero::before { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(8, 8, 10, 0) 25%, rgba(8, 8, 10, .88) 100%), linear-gradient(90deg, rgba(8, 8, 10, .6), transparent 70%); }
+.hero > * { position: relative; }
+.hero .outcome { font: 700 11.5px var(--sans); letter-spacing: .2em; text-transform: uppercase; }
+.outcome.Victory { color: var(--good); }
+.outcome.Defeat { color: var(--bad); }
+.hero h1 { font-size: 40px; color: #f5f2ea; text-shadow: 0 2px 18px rgba(0, 0, 0, .5); margin: 2px 0 10px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { background: rgba(255, 255, 255, .1); backdrop-filter: blur(8px); color: #ebe7dc; font: 12px var(--mono); padding: 3px 9px; border-radius: 99px; }
+.hero.noart { height: auto; padding: 8px 0 0; background: none; }
+.hero.noart::before { display: none; }
+.hero.noart h1 { color: var(--text); text-shadow: none; font-size: 28px; }
+.hero.noart .chip { background: var(--hover); color: var(--muted); backdrop-filter: none; }
+.mline { position: relative; height: 22px; margin-top: 16px; }
+.mline .bar { position: absolute; left: 0; right: 0; top: 10px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, .22); }
+.hero.noart .mline .bar { background: var(--track); }
+.mline .mk { position: absolute; top: 5px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: #e9e4d6; border: 2px solid rgba(0, 0, 0, .55); cursor: pointer; padding: 0; transition: transform .12s; }
+.mline .mk:hover { transform: scale(1.25); }
+.mline .mk.sel { background: var(--accent); }
+.mline .lbl { position: absolute; top: -18px; font: 11px var(--mono); color: rgba(255, 255, 255, .55); }
+
+/* ---------- player ---------- */
+.player { margin-top: 22px; }
+.stage { position: relative; background: #000; border-radius: 14px; overflow: hidden; aspect-ratio: 16 / 9; max-height: 64vh; width: 100%; margin: 0 auto; }
+.stage video { width: 100%; height: 100%; display: block; object-fit: contain; background: #000; }
+.stage .big { position: absolute; inset: 0; margin: auto; width: 68px; height: 68px; border-radius: 50%; background: rgba(0, 0, 0, .55); backdrop-filter: blur(6px); color: #fff; justify-content: center; padding: 0; transition: opacity .15s, transform .15s; }
+.stage .big:hover { background: rgba(0, 0, 0, .7); color: #fff; transform: scale(1.05); }
+.stage .big svg { width: 26px; height: 26px; margin-left: 3px; }
+.stage.playing .big { opacity: 0; pointer-events: none; }
+.stage:fullscreen { border-radius: 0; max-height: none; }
+.controls { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
+.controls .time { font: 12px var(--mono); color: var(--muted); min-width: 96px; padding: 0 6px; }
+.controls .grow { flex: 1; }
+.speed { font: 12px var(--mono); min-width: 40px; justify-content: center; }
+.scrub { position: relative; height: 34px; margin: 4px 0 0; cursor: pointer; user-select: none; touch-action: none; }
+.scrub .rail { position: absolute; left: 0; right: 0; top: 15px; height: 4px; border-radius: 2px; background: var(--track); }
+.scrub .trim { position: absolute; top: 15px; height: 4px; background: rgba(200, 170, 110, .35); }
+.scrub .played { position: absolute; left: 0; top: 15px; height: 4px; border-radius: 2px; background: var(--accent); pointer-events: none; }
+.scrub .head { position: absolute; top: 10px; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: var(--text); box-shadow: 0 1px 6px rgba(0, 0, 0, .4); pointer-events: none; transition: transform .1s; }
+.scrub:hover .head { transform: scale(1.15); }
+.scrub .h { position: absolute; top: 8px; width: 8px; height: 18px; margin-left: -4px; border-radius: 3px; background: var(--accent); cursor: ew-resize; border: 2px solid var(--bg); }
+.scrub .tick { position: absolute; top: 1px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: var(--c); pointer-events: none; }
+.scrub .hover { position: absolute; top: -20px; transform: translateX(-50%); font: 11px var(--mono); background: var(--raise); border: 1px solid var(--line); padding: 0 6px; border-radius: 5px; display: none; pointer-events: none; }
+.scrub:hover .hover { display: block; }
+.cliphead { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin: 16px 0 0; flex-wrap: wrap; }
+.cliphead .label { font: 600 18px/1.3 var(--display); }
+.cliphead .sub { color: var(--faint); font: 12px var(--mono); margin-top: 2px; }
+.reasons { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.reasons span { font-size: 12px; color: var(--muted); background: var(--hover); padding: 2px 9px; border-radius: 99px; }
+.tools { display: flex; gap: 2px; align-items: center; position: relative; }
+.tools .on.good { color: var(--good); }
+.tools .on.bad { color: var(--bad); }
+.trimbar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.trimbar .rng { font: 12px var(--mono); color: var(--muted); padding: 0 8px 0 2px; }
+.trimbar .grow { flex: 1; }
+.trimbar label { display: flex; gap: 7px; align-items: center; color: var(--muted); font-size: 12.5px; margin-right: 8px; cursor: pointer; }
+.menu { position: absolute; right: 0; top: 36px; background: var(--raise); border: 1px solid var(--line); border-radius: 10px; padding: 4px; box-shadow: var(--shadow); z-index: 10; min-width: 190px; display: none; }
+.menu.on { display: block; }
+.menu button { width: 100%; color: var(--text); }
+.menu button.danger { color: var(--bad); }
+
+/* ---------- settings: flat rows ---------- */
+.setwrap { display: flex; gap: 40px; align-items: flex-start; margin-top: 22px; }
+.cats { position: sticky; top: 6px; width: 160px; flex: none; display: flex; flex-direction: column; gap: 1px; }
+.cats button { width: 100%; }
+.sets { flex: 1; min-width: 0; }
+.sets h3 { margin: 36px 0 4px; scroll-margin-top: 10px; }
+.sets h3:first-child { margin-top: 0; }
+.set { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.set .l { min-width: 0; }
+.set .l .h { color: var(--muted); font-size: 12.5px; }
+.set .c { display: flex; align-items: center; gap: 8px; flex: none; }
+.set .c select, .set .c input[type=text] { max-width: 270px; }
+.set .c output { width: 42px; text-align: right; }
+dl { display: grid; grid-template-columns: 190px 1fr; margin: 20px 0 0; }
+dl dt, dl dd { padding: 9px 0; border-bottom: 1px solid var(--line); margin: 0; overflow-wrap: anywhere; }
+dl dt { color: var(--muted); }
+dl dd { font-family: var(--mono); font-size: 12px; }
+.legal { color: var(--faint); font-size: 11.5px; margin-top: 30px; max-width: 640px; }
+
+/* ---------- palette + toast ---------- */
+#palette { position: fixed; inset: 0; background: rgba(0, 0, 0, .4); display: none; z-index: 20; }
+#palette.on { display: block; animation: fade .12s; }
+#palette .box { width: min(580px, calc(100vw - 32px)); margin: 13vh auto 0; background: var(--raise); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+#palette .in { display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line); color: var(--faint); }
+#palette input { flex: 1; border: none; padding: 14px 0; outline: none; font-size: 15px; color: var(--text); }
+#palList { max-height: 48vh; overflow-y: auto; padding: 6px; }
+.pal { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.pal .grow { flex: 1; }
+.pal.sel { background: var(--active); }
+#toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(8px); background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 10px; opacity: 0; transition: opacity .16s, transform .16s; pointer-events: none; z-index: 30; font-weight: 500; display: flex; gap: 8px; align-items: center; }
+#toast.on { opacity: 1; transform: translateX(-50%); }
+
+@media (max-width: 760px) {
+  #side { position: fixed; inset: 0 auto 0 0; z-index: 8; box-shadow: var(--shadow); }
+  .col { padding: 4px 16px 60px; }
+  .hero { height: 220px; padding: 18px; }
+  .hero h1 { font-size: 30px; }
+  .setwrap { display: block; }
+  .cats { display: none; }
+  dl { grid-template-columns: 120px 1fr; }
+  .set { flex-wrap: wrap; }
+  .stats { gap: 28px; }
+}
+</style>
+</head>
+<body>
+<script>
+// Report script errors from the app window to the app log.
+window.addEventListener("error", e => { if (window.ipc) window.ipc.postMessage("log:" + e.message + " @" + e.lineno); });
+</script>
+<aside id="side">
+  <div class="brand" data-drag><img src="/favicon.ico" alt=""><b>League Highlights</b><button id="collapse" class="ibtn" title="Hide sidebar (Ctrl+B)" data-icon="sidebar"></button></div>
+  <div class="navs">
+    <button id="navHome" data-icon="grid">Highlights</button>
+    <button id="navSettings" data-icon="gear">Settings</button>
+    <button id="navStatus" data-icon="pulse">Status</button>
+  </div>
+  <div class="find"><span data-icon="search"></span><input type="text" id="search" placeholder="Search matches"><kbd>Ctrl K</kbd></div>
+  <div class="pills" id="pills"><button data-r="" class="on">All</button><button data-r="Victory">Wins</button><button data-r="Defeat">Losses</button></div>
+  <div id="matchList"></div>
+  <div class="foot">
+    <div class="pill" id="statPill" title="Recorder status"><span class="dot" id="dot"></span><div class="txt"><div class="st"><span id="state">Starting</span> <span class="mono muted" id="timer"></span></div><div class="det" id="statusDetail"></div></div></div>
+    <div class="row2">
+      <button id="btnSave" class="primary" title="Save the last seconds now"><span data-icon="record"></span>Save clip <kbd id="hkFoot">F8</kbd></button>
+      <button id="btnToggle" class="ibtn" title="Pause recording" data-icon="pause"></button>
+      <button id="btnFolder" class="ibtn" title="Open clips folder" data-icon="folder"></button>
+    </div>
+  </div>
+</aside>
+<div id="resizeTop"></div>
+<main id="main">
+  <div class="top" data-drag>
+    <button id="expand" class="ibtn" title="Show sidebar (Ctrl+B)" data-icon="sidebar"></button>
+    <span class="grow"></span>
+    <div class="wctl">
+      <button data-w="min" title="Minimize" data-icon="wmin"></button>
+      <button data-w="max" id="wMax" title="Maximize" data-icon="wmax"></button>
+      <button data-w="close" class="close" title="Close" data-icon="wclose"></button>
+    </div>
+  </div>
+  <div id="scroll">
+    <section class="view on" id="homeView"><div class="col" id="home"></div></section>
+    <section class="view" id="matchView"><div class="col" id="detail"></div></section>
+    <section class="view" id="reviewView"><div class="col" id="review"></div></section>
+    <section class="view" id="settingsView"><div class="col"><h1>Settings</h1><div class="setwrap"><nav class="cats" id="cats"></nav><div class="sets" id="settingsPage"></div></div></div></section>
+    <section class="view" id="statusView"><div class="col" id="statusPage"></div></section>
+  </div>
+</main>
+<div id="palette"><div class="box"><div class="in"><span data-icon="search"></span><input type="text" id="palInput" placeholder="Search matches or run a command"></div><div id="palList"></div></div></div>
+<div id="selbar"><span class="count" id="selCount"></span>
+  <button id="selCopy" data-icon="copy">Copy</button>
+  <button id="selSeen" data-icon="check">Mark reviewed</button>
+  <button id="selDelete" class="danger" data-icon="bin">Delete</button>
+  <button id="selClear" class="ibtn" title="Clear selection (Esc)" data-icon="wclose"></button>
+</div>
+<div id="toast"></div>
+<script>
+"use strict";
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const mmss = s => { s = Math.max(0, Math.floor(s || 0)); return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); };
+const title = s => String(s || "").toLowerCase().replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+const size = b => { const u = ["B","KB","MB","GB"]; let i = 0; b = +b || 0; while (b >= 1024 && i < 3) { b /= 1024; i++; } return (i ? b.toFixed(1) : b) + " " + u[i]; };
+const store = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+const api = async (path, body) => {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json", "X-LH": "1" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+};
+
+/* ---------- icons (thin line, currentColor) ---------- */
+const P = {
+  sidebar: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/>',
+  grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
+  record: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3" fill="currentColor"/>',
+  pause: '<path d="M9 5v14M15 5v14"/>',
+  resume: '<path d="M7 4.5v15l12-7.5z"/>',
+  folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
+  play: '<path d="M7 4.5v15l12-7.5z" fill="currentColor"/>',
+  vol: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
+  mute: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="m16 9.5 5 5M21 9.5l-5 5"/>',
+  full: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  up: '<path d="M7 11v9H4.5a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1zM7 11l4-7.5a2 2 0 0 1 3.2 1.9L13.5 9H19a2 2 0 0 1 2 2.3l-1.2 7A2 2 0 0 1 17.8 20H7"/>',
+  down: '<path d="M17 13V4h2.5a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1zM17 13l-4 7.5a2 2 0 0 1-3.2-1.9l.7-3.6H5a2 2 0 0 1-2-2.3l1.2-7A2 2 0 0 1 6.2 4H17"/>',
+  more: '<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
+  cut: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8 7.5 20 18M8 16.5 20 6"/>',
+  spark: '<path d="M12 3.5 13.8 10 20.5 12l-6.7 2L12 20.5 10.2 14 3.5 12l6.7-2z"/>',
+  bin: '<path d="M4.5 7h15M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 1.8h6a2 2 0 0 0 2-1.8L18 7M9 7V5a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 5v2"/>',
+  reveal: '<path d="M14 4h6v6M20 4l-9 9M18 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/>',
+  send: '<path d="M20.5 3.5 10 14M20.5 3.5l-6.5 17-4-6.5-6.5-4z"/>',
+  next: '<path d="m9 5 7 7-7 7"/>',
+  wmin: '<path d="M0 5h10"/>',
+  wmax: '<rect x=".5" y=".5" width="9" height="9" rx="1"/>',
+  wrestore: '<rect x=".5" y="2.5" width="7" height="7" rx="1"/><path d="M2.5 2.5v-1a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-1"/>',
+  wclose: '<path d="M.5.5l9 9M9.5.5l-9 9"/>',
+};
+const icon = (name, cls = "i") => `<svg class="${cls}" viewBox="${name.startsWith("w") ? "0 0 10 10" : "0 0 24 24"}">${P[name]}</svg>`;
+function paintIcons(root = document) {
+  $$("[data-icon]", root).forEach(el => { el.insertAdjacentHTML("afterbegin", icon(el.dataset.icon)); el.removeAttribute("data-icon"); });
+}
+paintIcons();
+
+let toastTimer;
+function toast(text, ok = true) {
+  const t = $("#toast"); t.innerHTML = (ok ? icon("check") : "") + esc(text); t.classList.add("on");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("on"), 2400);
+}
+
+const EVENT_COLORS = {
+  CHAMPION_KILL: "#e84057", MULTIKILL: "#f0904a", ASSIST: "#5aa6e8", PLAYER_DEATH: "#8a8a86",
+  ACE: "#e8c34a", DRAGON: "#a58bd6", DRAGON_STEAL: "#c4a6f5", BARON: "#9b6be0", BARON_STEAL: "#b98cff", MANUAL_TRIGGER: "#c8aa6e",
+};
+const state = { games: [], clips: [], game: null, clip: null, view: "home", lastClip: null, settings: null, devices: null, trim: [0, 0], result: "", hotkey: "F8", sel: new Set(), review: null, storage: null };
+
+/* ---------- views ---------- */
+function show(view) {
+  state.view = view;
+  $$(".view").forEach(v => v.classList.toggle("on", v.id === view + "View"));
+  $("#navHome").classList.toggle("on", view === "home" || view === "review");
+  $("#navSettings").classList.toggle("on", view === "settings");
+  $("#navStatus").classList.toggle("on", view === "status");
+  $("#scroll").scrollTop = 0;
+  if (view !== "match" && view !== "review") { state.game = null; renderMatches(); }
+  if (view !== "review") state.review = null;
+  if (view === "settings") loadSettings();
+  if (view === "status") renderStatus();
+  if (view === "home") renderHome();
+  if (view !== "match") { const v = $("#video"); if (v) v.pause(); }
+}
+$("#navHome").onclick = () => show("home");
+$("#navSettings").onclick = () => show("settings");
+$("#navStatus").onclick = () => show("status");
+$("#statPill").onclick = () => show("status");
+const toggleSide = () => document.body.classList.toggle("collapsed");
+$("#collapse").onclick = toggleSide; $("#expand").onclick = toggleSide;
+
+/* ---------- custom title bar (app window only) ---------- */
+// Not named `ipc`: WebView2 already defines a global of that name.
+const winCmd = msg => window.ipc && window.ipc.postMessage(msg);
+if (window.ipc) document.body.classList.add("native");
+window.lhWindowState = maximized => {
+  document.body.classList.toggle("maximized", maximized);
+  $("#wMax").innerHTML = icon(maximized ? "wrestore" : "wmax");
+  $("#wMax").title = maximized ? "Restore" : "Maximize";
+};
+$$(".wctl button").forEach(b => b.onclick = () => winCmd(b.dataset.w));
+document.addEventListener("mousedown", e => {
+  if (e.button !== 0 || !window.ipc) return;
+  if (e.target.closest("button, input, select, a, img")) return;
+  if (e.target.closest("[data-drag]")) { e.preventDefault(); e.detail === 2 ? winCmd("max") : winCmd("drag"); }
+});
+$("#resizeTop").onmousedown = e => { if (e.button === 0) { e.preventDefault(); winCmd("resize-top"); } };
+
+/* ---------- status ---------- */
+let lastStatus = null;
+async function pollStatus() {
+  if (document.hidden) return;
+  try {
+    const s = await api("/api/status");
+    lastStatus = s;
+    const st = s.status;
+    const recording = st.state === "RECORDING" || st.state === "SAVING CLIP";
+    $("#dot").className = "dot " + (recording ? "rec" : st.state === "ERROR" ? "warn" : st.state === "SKIPPED" ? "ok" : "");
+    $("#state").textContent = title(st.state);
+    $("#timer").textContent = st.recording_since && recording ? mmss(s.now - st.recording_since) : "";
+    $("#statusDetail").textContent = st.detail || "";
+    $("#statusDetail").title = st.detail || "";
+    const t = $("#btnToggle");
+    t.innerHTML = icon(st.paused ? "resume" : "pause");
+    t.title = st.paused ? "Resume recording" : "Pause recording";
+    if (st.last_clip && st.last_clip !== state.lastClip) {
+      const first = state.lastClip === null;
+      state.lastClip = st.last_clip;
+      if (!first) { toast("Highlight saved"); loadClips(); }
+    }
+    if (state.view === "status") renderStatus();
+  } catch (e) {
+    $("#state").textContent = "Disconnected"; $("#statusDetail").textContent = "League Highlights is not running."; $("#dot").className = "dot warn";
+  }
+}
+const saveNow = () => api("/api/action/save", {}).then(() => toast("Saving clip…")).catch(e => toast(e.message, false));
+const toggleRec = () => api("/api/action/toggle", {}).then(pollStatus);
+const openFolder = () => api("/api/action/open-folder", {});
+$("#btnSave").onclick = saveNow; $("#btnToggle").onclick = toggleRec; $("#btnFolder").onclick = openFolder;
+
+function renderStatus() {
+  const s = lastStatus; if (!s) return;
+  const d = s.diagnostics || {}, live = s.live || {}, m = live.match;
+  const rows = [
+    ["State", title(s.status.state)], ["Detail", s.status.detail || "—"],
+    ["Encoder", (d.encoder || "—") + (d.hardware_encoder ? " (hardware)" : "")],
+    ["Capture", d.capture_backend || "—"], ["Capture health", d.health || "—"],
+    ["FPS", d.fps ? d.fps.toFixed(1) : "—"], ["Frames", d.frame || 0],
+    ["Dropped / duplicated", (d.dropped_frames || 0) + " / " + (d.duplicated_frames || 0) + (d.drop_rate ? " (" + d.drop_rate.toFixed(2) + "% dropped)" : "")],
+    ["Encoder speed", d.speed ? d.speed.toFixed(2) + "×" : "—"],
+    ["Live game data", live.text],
+    ["Current match", m ? `${m.champion_name || "?"} · ${title(m.game_mode)} · ${mmss(m.duration_seconds)} · ${m.kills}/${m.deaths}/${m.assists}` : "—"],
+    ["Save queue", s.queued],
+    ["Audio warnings", (s.status.warnings || []).join("; ") || "None"],
+    ["Last error", s.status.last_error || "None"],
+    ["FFmpeg", s.ffmpeg || "Missing"], ["Version", s.version],
+  ];
+  $("#statusPage").innerHTML = "<h1>Status</h1><dl>" + rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("") + "</dl>"
+    + `<p class="legal">League Highlights isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</p>`;
+}
+
+/* ---------- data ---------- */
+function normResult(r) {
+  r = String(r || "").toUpperCase();
+  if (["WIN","WON","VICTORY"].includes(r)) return "Victory";
+  if (["LOSE","LOSS","LOST","DEFEAT"].includes(r)) return "Defeat";
+  return r && r !== "UNKNOWN" ? title(r) : "";
+}
+const clipStart = c => c.clip_window_start_wall ?? Date.parse(c.created_at) / 1000;
+function groupGames(clips) {
+  const map = new Map();
+  for (const c of clips) {
+    const key = c.match_id || "__ungrouped__";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(c);
+  }
+  const games = [];
+  for (const [id, list] of map) {
+    list.sort((a, b) => clipStart(a) - clipStart(b));
+    const pick = f => (list.find(c => c[f]) || {})[f] || "";
+    const started = list.find(c => c.match_started_at)?.match_started_at;
+    const kda = list.find(c => c.match_kills || c.match_deaths || c.match_assists);
+    const game = {
+      id, clips: list, ungrouped: id === "__ungrouped__",
+      started: started ? new Date(started * 1000) : new Date(Math.min(...list.map(c => Date.parse(c.created_at)))),
+      champion: pick("champion_name"), player: pick("player_name"), mode: pick("game_mode"),
+      result: normResult(pick("match_result")),
+      kda: kda ? `${kda.match_kills}/${kda.match_deaths}/${kda.match_assists}` : "",
+      duration: (list.find(c => c.match_duration_seconds > 0) || {}).match_duration_seconds || 0,
+    };
+    list.forEach(c => c._game = game);
+    games.push(game);
+  }
+  return games.sort((a, b) => b.started - a.started);
+}
+const gameName = g => g.ungrouped ? "Ungrouped clips" : g.champion || "League match";
+const artOn = () => !state.settings || state.settings.champion_art !== false;
+const modeName = m => ({ CLASSIC: "Summoner's Rift", ARAM: "ARAM", CHERRY: "Arena", URF: "URF", PRACTICETOOL: "Practice Tool" }[String(m || "").toUpperCase()] || title(m));
+function avatar(g, cls = "") {
+  const letter = esc((g.champion || "?").charAt(0).toUpperCase());
+  const img = artOn() && g.champion ? `<img loading="lazy" alt="" src="/champ/${encodeURIComponent(g.champion)}/icon" onerror="this.remove()">` : "";
+  return `<span class="cicon ${cls} ${g.result}">${letter}${img}</span>`;
+}
+const clock = d => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function bucket(d) {
+  const day = 86400000, today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = today - new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return diff <= 0 ? "Today" : diff <= day ? "Yesterday" : diff <= 7 * day ? "Last 7 days" : diff <= 30 * day ? "Last 30 days" : "Older";
+}
+function dateText(d) { const b = bucket(d); return (b === "Today" || b === "Yesterday" ? b : d.toLocaleDateString()) + " " + clock(d); }
+
+async function loadClips() {
+  try {
+    const data = await api("/api/clips");
+    state.clips = data.clips;
+    state.games = groupGames(data.clips);
+    renderMatches();
+    if (state.view === "match") {
+      const keep = state.game && state.games.find(g => g.id === state.game.id);
+      if (keep) openGame(keep, state.clip && keep.clips.find(c => c.file === state.clip.file), true);
+      else show("home");
+    } else if (state.view === "home") renderHome();
+  } catch (e) { toast(e.message, false); }
+}
+
+/* ---------- sidebar ---------- */
+function visibleGames() {
+  const q = $("#search").value.trim().toLowerCase();
+  return state.games.filter(g => (!state.result || g.result === state.result) && (!q || [g.champion, g.player, g.mode, ...g.clips.map(c => c.label)].join(" ").toLowerCase().includes(q)));
+}
+function renderMatches() {
+  let last = "";
+  $("#matchList").innerHTML = visibleGames().map(g => {
+    const b = bucket(g.started);
+    const head = b !== last ? `<div class="group">${b}</div>` : "";
+    last = b;
+    const sub = [g.result ? `<span class="${g.result}">${g.result}</span>` : "", g.kda, !g.result && !g.kda ? clock(g.started) : ""].filter(Boolean).join(" · ");
+    return `${head}<div class="match ${state.game && state.game.id === g.id ? "sel" : ""}" data-id="${esc(g.id)}" title="${esc(dateText(g.started))}">
+      ${avatar(g)}<div class="meta"><div class="name">${esc(gameName(g))}</div><div class="sub">${sub}</div></div><span class="mono n">${g.clips.length}</span></div>`;
+  }).join("") || `<div class="group">${state.games.length ? "No matches found" : "No matches yet"}</div>`;
+  $$("#matchList .match").forEach(el => el.onclick = () => openGame(state.games.find(g => g.id === el.dataset.id)));
+}
+$("#search").oninput = renderMatches;
+$$("#pills button").forEach(b => b.onclick = () => { state.result = b.dataset.r; $$("#pills button").forEach(x => x.classList.toggle("on", x === b)); renderMatches(); });
+
+/* ---------- tiles ---------- */
+function tile(c, showGame) {
+  const g = c._game;
+  const sub = showGame
+    ? `${esc(gameName(g))} · ${esc(dateText(new Date(c.created_at)))}`
+    : `${c.event_game_time != null ? mmss(c.event_game_time) + " in match · " : ""}${c.automatic ? "Smart" : "Manual"}`;
+  return `<button class="tile ${state.clip && state.clip.file === c.file ? "sel" : ""} ${state.sel.has(c.file) ? "picked" : ""}" data-file="${esc(c.file)}">
+    <div class="th">${c.has_thumb ? `<img loading="lazy" src="/thumb/${encodeURIComponent(c.file)}" alt="">` : ""}
+      ${c.highlight_score ? `<span class="score">${c.highlight_score}</span>` : ""}
+      ${c.reviewed ? "" : `<span class="new" title="New"></span>`}
+      <span class="badge">${mmss(c.duration_seconds)}</span><span class="play">${icon("play")}</span><span class="pick">${icon("check")}</span></div>
+    <div class="cap">${showGame ? avatar(g, "sm") : ""}<div><div class="t">${esc(title(c.label))}${c.rating === "good" ? `<span class="rdot good"></span>` : c.rating === "bad" ? `<span class="rdot bad"></span>` : ""}</div><div class="s">${sub}</div></div></div>
+  </button>`;
+}
+function bindTiles(root, showGame) {
+  $$(".tile", root).forEach(el => el.onclick = e => {
+    const c = state.clips.find(x => x.file === el.dataset.file);
+    if (!c) return;
+    // Ctrl/Shift-click (or any click while selecting) toggles selection.
+    if (e.ctrlKey || e.shiftKey || state.sel.size) { togglePick(c.file); return; }
+    if (showGame || !state.game) openGame(c._game, c); else { selectClip(c); $("#scroll").scrollTo({ top: 0, behavior: "smooth" }); }
+  });
+}
+
+/* ---------- home ---------- */
+function renderHome() {
+  const clips = [...state.clips].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  if (!clips.length) {
+    $("#home").innerHTML = `<div class="empty"><h1>No highlights yet</h1>Start a League game in Borderless mode and press <kbd>${esc(state.hotkey)}</kbd>,<br>or let Smart Highlights keep your best plays automatically.</div>`;
+    return;
+  }
+  const wins = state.games.filter(g => g.result === "Victory").length;
+  const best = clips.reduce((a, c) => (c.highlight_score || 0) > (a.highlight_score || 0) ? c : a, clips[0]);
+  const total = clips.reduce((a, c) => a + (c.duration_seconds || 0), 0);
+  const top = [...clips].filter(c => c.automatic).sort((a, b) => (b.highlight_score || 0) - (a.highlight_score || 0)).slice(0, 4);
+  const fresh = clips.filter(c => !c.reviewed);
+  const freshGame = fresh.length ? fresh[0]._game : null;
+  const st = state.storage;
+  $("#home").innerHTML = `
+    <h1>Highlights</h1>
+    <div class="stats">
+      <div><b>${state.games.filter(g => !g.ungrouped).length}</b><span>Matches</span></div>
+      <div><b>${clips.length}</b><span>Highlights</span></div>
+      <div><b>${wins}</b><span>Wins with clips</span></div>
+      <div><b>${best.highlight_score || "—"}</b><span>Best score</span></div>
+      <div><b>${mmss(total)}</b><span>Footage</span></div>
+    </div>
+    ${st ? `<div class="storage">${st.free_bytes ? `<span class="bar"><i style="width:${Math.min(100, (st.library_bytes + st.shared_bytes) / (st.library_bytes + st.shared_bytes + st.free_bytes) * 100).toFixed(1)}%"></i></span>` : ""}
+      <span class="mono">${size(st.library_bytes + st.shared_bytes)} used${st.free_bytes ? " · " + size(st.free_bytes) + " free" : ""}</span>
+      <button id="cleanBtn" title="Delete old clips that aren't rated Good">Clean up…</button></div>` : ""}
+    ${fresh.length ? `<div class="notice">${avatar(freshGame)}
+      <div class="txt"><b>${fresh.length} new highlight${fresh.length === 1 ? "" : "s"}</b> to review<div>Keep the good ones, delete the rest. Your choices tune Smart Highlights.</div></div>
+      <button class="primary" id="reviewBtn">${icon("play")}Review</button></div>` : ""}
+    ${top.length ? `<h3>Top plays <span class="muted">highest Smart Highlights scores</span></h3><div class="tiles" id="topTiles">${top.map(c => tile(c, true)).join("")}</div>` : ""}
+    <h3>Recent <span class="muted">${clips.length} clip${clips.length === 1 ? "" : "s"}</span></h3>
+    <div class="tiles" id="recentTiles">${clips.slice(0, 40).map(c => tile(c, true)).join("")}</div>`;
+  bindTiles($("#home"), true);
+  if ($("#reviewBtn")) $("#reviewBtn").onclick = () => openReview();
+  if ($("#cleanBtn")) $("#cleanBtn").onclick = cleanUp;
+}
+async function loadStorage() {
+  try { const r = await api("/api/storage"); state.storage = r.storage; state.cleanupPreview = r.cleanup_preview; if (state.view === "home") renderHome(); } catch {}
+}
+async function cleanUp() {
+  const days = (state.settings && state.settings.cleanup_days) || 30;
+  const preview = await api("/api/cleanup", { days, dry_run: true });
+  if (!preview.clips) { toast(`Nothing older than ${days} days to clean up`); return; }
+  if (!confirm(`Delete ${preview.clips} clip${preview.clips === 1 ? "" : "s"} older than ${days} days that aren't rated Good?\n\nThis frees ${size(preview.bytes)}. Deleted clips can't be recovered.`)) return;
+  const r = await api("/api/cleanup", { days, dry_run: false });
+  toast(`Deleted ${r.clips} clip${r.clips === 1 ? "" : "s"} · freed ${size(r.bytes)}`);
+  loadClips(); loadStorage();
+}
+
+/* ---------- selection ---------- */
+function togglePick(file) {
+  state.sel.has(file) ? state.sel.delete(file) : state.sel.add(file);
+  drawSelection();
+}
+function clearPicks() { state.sel.clear(); drawSelection(); }
+function drawSelection() {
+  document.body.classList.toggle("selecting", state.sel.size > 0);
+  $("#selCount").textContent = `${state.sel.size} selected`;
+  $$(".tile").forEach(t => t.classList.toggle("picked", state.sel.has(t.dataset.file)));
+}
+$("#selClear").onclick = clearPicks;
+$("#selCopy").onclick = () => api("/api/clips/copy", { files: [...state.sel] }).then(r => toast(`Copied ${r.copied} clip${r.copied === 1 ? "" : "s"} — paste with Ctrl+V`)).catch(e => toast(e.message, false));
+$("#selSeen").onclick = () => api("/api/clips/reviewed", { files: [...state.sel] }).then(() => { toast("Marked as reviewed"); clearPicks(); loadClips(); });
+$("#selDelete").onclick = async () => {
+  const n = state.sel.size;
+  if (!confirm(`Delete ${n} clip${n === 1 ? "" : "s"}? The video files are removed permanently.`)) return;
+  const v = $("#video"); if (v && state.clip && state.sel.has(state.clip.file)) { v.removeAttribute("src"); v.load(); state.clip = null; }
+  await api("/api/clips/delete", { files: [...state.sel] }).catch(e => toast(e.message, false));
+  toast(`Deleted ${n} clip${n === 1 ? "" : "s"}`); clearPicks(); loadClips(); loadStorage();
+};
+
+/* ---------- post-match review ---------- */
+function openReview(matchId) {
+  const fresh = [...state.clips].filter(c => !c.reviewed && (!matchId || c.match_id === matchId));
+  if (!fresh.length) { toast("All caught up — no new highlights"); show("home"); return; }
+  // Review the most recent match first, in match order.
+  const game = fresh.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0]._game;
+  const queue = game.clips.filter(c => !c.reviewed);
+  state.review = { game, queue, i: 0, done: 0 };
+  state.game = game;
+  $$(".view").forEach(v => v.classList.toggle("on", v.id === "reviewView"));
+  state.view = "review";
+  $("#detail").innerHTML = "";
+  renderMatches();
+  renderReview();
+}
+window.openReview = openReview;
+function renderReview() {
+  const r = state.review;
+  if (!r) return;
+  if (r.i >= r.queue.length) {
+    $("#review").innerHTML = `<div class="empty"><h1>All caught up</h1>${r.done} highlight${r.done === 1 ? "" : "s"} reviewed from ${esc(gameName(r.game))}.<div class="rvacts" style="justify-content:center"><button id="rvMatch">Open match</button><button class="primary" id="rvHome">Back to Highlights</button></div></div>`;
+    $("#rvMatch").onclick = () => openGame(r.game);
+    $("#rvHome").onclick = () => show("home");
+    loadClips();
+    return;
+  }
+  const clip = r.queue[r.i];
+  $("#review").innerHTML = `
+    <div class="rvhead"><h1>Review</h1><span class="muted">${r.i + 1} of ${r.queue.length} · ${esc(gameName(r.game))}${r.game.result ? " · " + r.game.result : ""}</span></div>
+    <div class="rvprog">${r.queue.map((_, i) => `<i class="${i < r.i ? "done" : i === r.i ? "cur" : ""}"></i>`).join("")}</div>
+    <div class="player" id="player"></div>
+    <div class="rvacts">
+      <button class="primary" id="rvKeep">${icon("check")}Keep <kbd>K</kbd></button>
+      <button id="rvGood">${icon("up")}Good <kbd>G</kbd></button>
+      <button id="rvDelete" class="danger">${icon("bin")}Delete <kbd>D</kbd></button>
+      <span class="grow"></span>
+      <button id="rvSkip">Skip <kbd>→</kbd>${icon("next")}</button>
+    </div>`;
+  selectClip(clip);
+  const v = $("#video"); if (v) v.play().catch(() => {});
+  $("#rvKeep").onclick = () => reviewAct("keep");
+  $("#rvGood").onclick = () => reviewAct("good");
+  $("#rvDelete").onclick = () => reviewAct("delete");
+  $("#rvSkip").onclick = () => reviewAct("skip");
+}
+async function reviewAct(kind) {
+  const r = state.review; if (!r) return;
+  const clip = r.queue[r.i]; if (!clip) return;
+  const f = encodeURIComponent(clip.file);
+  try {
+    if (kind === "delete") {
+      const v = $("#video"); if (v) { v.removeAttribute("src"); v.load(); }
+      await api(`/api/clip/${f}/delete`, {});
+    } else if (kind !== "skip") {
+      if (kind === "good") await api(`/api/clip/${f}/rate`, { rating: "good" });
+      await api(`/api/clip/${f}/reviewed`, { reviewed: true });
+    }
+    if (kind !== "skip") { r.done++; clip.reviewed = true; }
+  } catch (e) { toast(e.message, false); return; }
+  r.i++;
+  renderReview();
+}
+
+/* ---------- match ---------- */
+function openGame(game, clip, keepScroll) {
+  if (!game) return;
+  if (state.view !== "match") {
+    state.view = "match";
+    $$(".view").forEach(v => v.classList.toggle("on", v.id === "matchView"));
+    ["#navHome", "#navSettings", "#navStatus"].forEach(s => $(s).classList.remove("on"));
+  }
+  state.game = game;
+  renderMatches();
+  const best = clip || [...game.clips].sort((a, b) => (b.highlight_score || 0) - (a.highlight_score || 0))[0];
+  const span = Math.max(game.duration, ...game.clips.map(c => c.event_game_time || 0), 1);
+  const art = artOn() && game.champion;
+  const chips = [game.kda && `KDA ${game.kda}`, game.mode && modeName(game.mode), game.duration && mmss(game.duration), dateText(game.started), game.player].filter(Boolean);
+  const marks = game.clips.filter(c => c.event_game_time != null);
+  $("#detail").innerHTML = `
+    <div class="hero ${art ? "" : "noart"}" ${art ? `style="--art:url('/champ/${encodeURIComponent(game.champion)}/splash')"` : ""}>
+      ${game.result ? `<div class="outcome ${game.result}">${esc(game.result)}</div>` : ""}
+      <h1>${esc(gameName(game))}</h1>
+      <div class="chips">${chips.map(c => `<span class="chip">${esc(c)}</span>`).join("")}</div>
+      ${!game.ungrouped && marks.length ? `<div class="mline"><div class="bar"></div>${marks.map(c => `<button class="mk" data-file="${esc(c.file)}" style="left:${(c.event_game_time / span * 100).toFixed(2)}%" title="${esc(title(c.label))} · ${mmss(c.event_game_time)}"></button>`).join("")}</div>` : ""}
+    </div>
+    <div class="player" id="player"></div>
+    <h3>Highlights in this match <span class="muted">${game.clips.length}</span></h3>
+    <div class="tiles" id="matchTiles">${game.clips.map(c => tile(c, false)).join("")}</div>`;
+  $$("#detail .mk").forEach(el => el.onclick = () => selectClip(game.clips.find(c => c.file === el.dataset.file)));
+  bindTiles($("#matchTiles"), false);
+  if (!keepScroll) $("#scroll").scrollTop = 0;
+  selectClip(best);
+}
+
+let clipActions = {};
+function selectClip(clip) {
+  if (!clip) return;
+  state.clip = clip;
+  $$("#detail .tile, #detail .mk").forEach(el => el.classList.toggle("sel", el.dataset.file === clip.file));
+  const dur = clip.duration_seconds || 0;
+  state.trim = [0, dur];
+  const reasons = clip.score_reasons || [];
+  const vol = store.get("lh.volume", 1), muted = store.get("lh.muted", false);
+  $("#player").innerHTML = `
+    <div class="stage" id="stage">
+      <video id="video" preload="metadata" ${clip.has_thumb ? `poster="/thumb/${encodeURIComponent(clip.file)}"` : ""} src="/media/${encodeURIComponent(clip.file)}"></video>
+      <button class="big" id="bigPlay" title="Play (Space)">${icon("play")}</button>
+    </div>
+    <div class="scrub" id="scrub"><div class="rail"></div><div class="trim" id="trimSel"></div><div class="played" id="played"></div>
+      ${(clip.events || []).map(e => `<div class="tick" style="left:${(e.relative_time / Math.max(dur, .1) * 100).toFixed(2)}%;--c:${EVENT_COLORS[e.type] || "#8a8a86"}" title="${esc(title(e.type))}"></div>`).join("")}
+      <div class="h" id="h0" title="Trim start (I)"></div><div class="h" id="h1" title="Trim end (O)"></div><div class="head" id="head"></div><div class="hover" id="hoverT"></div></div>
+    <div class="controls">
+      <button class="ibtn" id="pp" title="Play (Space)">${icon("play")}</button>
+      <span class="time" id="time">00:00 / ${mmss(dur)}</span>
+      <span class="grow"></span>
+      <button class="speed" id="speed" title="Playback speed">1×</button>
+      <button class="ibtn" id="muteBtn" title="Mute (M)">${icon(muted ? "mute" : "vol")}</button>
+      <input type="range" id="volume" min="0" max="1" step="0.05" value="${vol}" style="width:84px" title="Volume">
+      <button class="ibtn" id="fs" title="Fullscreen (F)">${icon("full")}</button>
+    </div>
+    <div class="cliphead">
+      <div><div class="label">${esc(title(clip.label))}</div>
+      <div class="sub">${esc(dateText(new Date(clip.created_at)))} · ${mmss(dur)} · ${size(clip.size_bytes)}${clip.highlight_score ? " · score " + clip.highlight_score : ""}</div></div>
+      <div class="tools">
+        <button id="bCopy" title="Copy video — paste into Discord or a chat (Ctrl+C)">${icon("copy")}Copy</button>
+        <button id="bDiscord" title="Make a copy under your Discord upload limit from the trimmed range">${icon("send")}Discord</button>
+        <button class="ibtn ${clip.rating === "good" ? "on good" : ""}" id="rGood" title="Good clip (G)">${icon("up")}</button>
+        <button class="ibtn ${clip.rating === "bad" ? "on bad" : ""}" id="rBad" title="Not impressive (B)">${icon("down")}</button>
+        <button class="ibtn" id="bMore" title="More">${icon("more")}</button>
+        <div class="menu" id="menu"><button id="bReveal">${icon("reveal")}Show in Explorer</button><button id="bDelete" class="danger">${icon("bin")}Delete clip</button></div>
+      </div>
+    </div>
+    ${reasons.length ? `<div class="reasons">${reasons.map(r => `<span>${esc(r)}</span>`).join("")}</div>` : ""}
+    <div class="trimbar">
+      ${icon("cut")}<span class="rng" id="trimText"></span>
+      <button id="tStart" title="Trim start at playhead (I)">Set start</button>
+      <button id="tEnd" title="Trim end at playhead (O)">Set end</button>
+      <button id="tSmart" ${clip.suggested_trim_start == null ? "disabled" : ""} title="${esc(clip.smart_trim_reason || "Smart trim")}">${icon("spark")}Smart trim</button>
+      <span class="grow"></span>
+      <label><input type="checkbox" id="tReplace"> Replace original</label>
+      <button id="tSave" class="primary">Save trim</button>
+    </div>`;
+  const video = $("#video"), stage = $("#stage"), scrub = $("#scrub");
+  video.volume = vol; video.muted = muted;
+  const pct = t => (Math.max(0, Math.min(dur, t)) / Math.max(dur, .1) * 100) + "%";
+  const drawTrim = () => {
+    const [a, b] = state.trim;
+    $("#h0").style.left = pct(a); $("#h1").style.left = pct(b);
+    $("#trimSel").style.left = pct(a); $("#trimSel").style.width = ((b - a) / Math.max(dur, .1) * 100) + "%";
+    $("#trimText").textContent = `${mmss(a)} – ${mmss(b)} · ${(b - a).toFixed(1)}s`;
+  };
+  const drawTime = () => {
+    $("#head").style.left = pct(video.currentTime); $("#played").style.width = pct(video.currentTime);
+    $("#time").textContent = `${mmss(video.currentTime)} / ${mmss(dur)}`;
+  };
+  const playing = on => {
+    stage.classList.toggle("playing", on);
+    $("#pp").innerHTML = icon(on ? "pause" : "play"); $("#pp").title = on ? "Pause (Space)" : "Play (Space)";
+  };
+  const toggle = () => video.paused ? video.play() : video.pause();
+  video.onplay = () => playing(true); video.onpause = video.onended = () => playing(false);
+  video.ontimeupdate = drawTime;
+  video.onclick = toggle; $("#bigPlay").onclick = toggle; $("#pp").onclick = toggle;
+  video.ondblclick = () => fullscreen();
+  const fullscreen = () => document.fullscreenElement ? document.exitFullscreen() : stage.requestFullscreen().catch(() => {});
+  $("#fs").onclick = fullscreen;
+  const speeds = [1, 1.5, 2, 0.5, 0.25];
+  $("#speed").onclick = () => { const i = (speeds.indexOf(video.playbackRate) + 1) % speeds.length; video.playbackRate = speeds[i]; $("#speed").textContent = speeds[i] + "×"; };
+  const setMute = m => { video.muted = m; store.set("lh.muted", m); $("#muteBtn").innerHTML = icon(m ? "mute" : "vol"); };
+  $("#muteBtn").onclick = () => setMute(!video.muted);
+  $("#volume").oninput = e => { video.volume = +e.target.value; store.set("lh.volume", video.volume); if (video.muted && video.volume > 0) setMute(false); };
+  const timeAt = e => { const r = scrub.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * dur; };
+  scrub.onpointermove = e => { const t = timeAt(e); const h = $("#hoverT"); h.textContent = mmss(t); h.style.left = pct(t); };
+  scrub.onpointerdown = e => {
+    if (e.target.classList.contains("h")) return;
+    e.preventDefault();
+    video.currentTime = timeAt(e); drawTime();
+    const move = ev => { video.currentTime = timeAt(ev); drawTime(); };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
+  const drag = index => ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    const move = e => {
+      let t = timeAt(e);
+      t = index === 0 ? Math.min(t, state.trim[1] - .5) : Math.max(t, state.trim[0] + .5);
+      state.trim[index] = Math.max(0, Math.min(dur, t));
+      video.currentTime = state.trim[index];
+      drawTrim(); drawTime();
+    };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
+  $("#h0").onpointerdown = drag(0); $("#h1").onpointerdown = drag(1);
+  const setIn = () => { state.trim[0] = Math.max(0, Math.min(video.currentTime, state.trim[1] - .5)); drawTrim(); };
+  const setOut = () => { state.trim[1] = Math.min(dur, Math.max(video.currentTime, state.trim[0] + .5)); drawTrim(); };
+  const rate = r => api(`/api/clip/${encodeURIComponent(clip.file)}/rate`, { rating: clip.rating === r ? "" : r }).then(() => { toast(clip.rating === r ? "Rating cleared" : "Thanks — Smart Highlights will learn from this"); loadClips(); }).catch(e => toast(e.message, false));
+  const remove = async () => {
+    if (!confirm(`Delete "${title(clip.label)}"? The video file is removed permanently.`)) return;
+    video.removeAttribute("src"); video.load();
+    await api(`/api/clip/${encodeURIComponent(clip.file)}/delete`, {}).catch(e => toast(e.message, false));
+    state.clip = null; toast("Clip deleted"); loadClips();
+  };
+  $("#tStart").onclick = setIn; $("#tEnd").onclick = setOut;
+  $("#tSmart").onclick = () => { state.trim = [clip.suggested_trim_start, clip.suggested_trim_end]; video.currentTime = state.trim[0]; drawTrim(); drawTime(); toast(clip.smart_trim_reason || "Smart trim applied"); };
+  $("#tSave").onclick = async () => {
+    const replace = $("#tReplace").checked;
+    if (replace && !confirm("Replace the original clip with the trimmed version?")) return;
+    $("#tSave").disabled = true; $("#tSave").textContent = "Saving…";
+    if (replace) { video.removeAttribute("src"); video.load(); }
+    try {
+      const r = await api(`/api/clip/${encodeURIComponent(clip.file)}/trim`, { start: state.trim[0], end: state.trim[1], replace });
+      toast("Trimmed clip saved");
+      state.clip = { file: r.file };
+      await loadClips();
+    } catch (e) { toast(e.message, false); $("#tSave").disabled = false; $("#tSave").textContent = "Save trim"; }
+  };
+  $("#rGood").onclick = () => rate("good"); $("#rBad").onclick = () => rate("bad");
+  $("#bMore").onclick = e => { e.stopPropagation(); $("#menu").classList.toggle("on"); };
+  $("#bReveal").onclick = () => api(`/api/clip/${encodeURIComponent(clip.file)}/reveal`, {});
+  const copyClip = () => api(`/api/clip/${encodeURIComponent(clip.file)}/copy`, {}).then(() => toast("Video copied — paste with Ctrl+V")).catch(e => toast(e.message, false));
+  $("#bCopy").onclick = copyClip;
+  $("#bDiscord").onclick = async () => {
+    const b = $("#bDiscord"); b.disabled = true; b.lastChild.textContent = "Exporting…";
+    toast(`Making a Discord copy of ${(state.trim[1] - state.trim[0]).toFixed(0)}s…`);
+    try {
+      const r = await api(`/api/clip/${encodeURIComponent(clip.file)}/discord`, { start: state.trim[0], end: state.trim[1] });
+      toast(`Discord copy ready (${size(r.size)})${r.copied ? " — copied, paste with Ctrl+V" : ""}`);
+      loadStorage();
+    } catch (e) { toast(e.message, false); }
+    b.disabled = false; b.lastChild.textContent = "Discord";
+  };
+  $("#bDelete").onclick = remove;
+  clipActions = {
+    setIn, setOut, rate, remove, toggle, fullscreen, copy: copyClip,
+    mute: () => setMute(!video.muted),
+    seek: d => { video.currentTime = Math.max(0, Math.min(dur, video.currentTime + d)); drawTime(); },
+  };
+  drawTrim(); drawTime();
+}
+document.addEventListener("click", () => { const m = $("#menu"); if (m) m.classList.remove("on"); });
+function stepClip(delta) {
+  if (!state.game || !state.clip) return;
+  const list = state.game.clips, i = list.findIndex(c => c.file === state.clip.file);
+  if (list[i + delta]) selectClip(list[i + delta]);
+}
+
+/* ---------- settings (flat rows) ---------- */
+const SCOPES = [["all","All games"],["exclude_aram","All except ARAM"],["ranked_only","Ranked only"],["solo_duo_only","Ranked Solo/Duo only"],["flex_only","Ranked Flex only"],["normal_draft_only","Normal Draft only"]];
+const RES = [["1920x1080","1920 × 1080"],["1600x900","1600 × 900"],["1280x720","1280 × 720"]];
+const QUALITY = [[20,"High quality"],[23,"Balanced"],[27,"Smaller files"],[30,"Minimum size"]];
+async function loadSettings() {
+  try {
+    const [s, d] = await Promise.all([api("/api/settings"), state.devices ? Promise.resolve(state.devices) : api("/api/devices")]);
+    state.settings = s; state.devices = d; setHotkey(s.hotkey_display);
+    renderSettings();
+  } catch (e) { toast(e.message, false); }
+}
+const opt = (list, value) => list.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(value) ? "selected" : ""}>${esc(l)}</option>`).join("");
+const devOpts = (list, value) => `<option value="">Windows default</option>` + [...new Set([...(value ? [value] : []), ...list])].map(n => `<option ${n === value ? "selected" : ""}>${esc(n)}</option>`).join("");
+const row = (label, help, control) => `<div class="set"><div class="l"><div>${label}</div>${help ? `<div class="h">${help}</div>` : ""}</div><div class="c">${control}</div></div>`;
+const check = (key, s) => `<input type="checkbox" data-k="${key}" ${s[key] ? "checked" : ""}>`;
+function renderSettings() {
+  const s = state.settings, d = state.devices || { system: [], microphone: [] };
+  const q = QUALITY.reduce((best, cur) => Math.abs(cur[0] - s.quality) < Math.abs(best[0] - s.quality) ? cur : best)[0];
+  const sections = [
+    ["Recording", `
+      ${row("Record highlights", "Master switch for the rolling buffer.", check("recording_enabled", s))}
+      ${row("Start automatically", "Begin recording when the League game window appears.", check("auto_start", s))}
+      ${row("Games to record", "Reads the queue from the League Client.", `<select data-k="recording_scope">${opt(SCOPES, s.recording_scope)}</select>`)}
+      ${row("Skip custom games", "", check("recording_skip_custom_games", s))}
+      ${row("Skip Arena", "", check("recording_skip_arena", s))}
+      ${row("Resolution", "League must run in Borderless or Windowed mode.", `<select data-k="resolution">${opt(RES, s.width + "x" + s.height)}</select>`)}
+      ${row("Frame rate", "", `<select data-k="fps" data-num>${opt([[60,"60 FPS"],[30,"30 FPS"]], s.fps)}</select>`)}
+      ${row("Quality", "NVENC, Quick Sync or AMF is used when available.", `<select data-k="quality" data-num>${opt(QUALITY, q)}</select>`)}
+      ${row("Buffer length", "How much footage the shortcut saves.", `<select data-k="buffer_seconds" data-num>${opt([[30,"30 seconds"],[45,"45 seconds"],[60,"60 seconds"],[90,"90 seconds"]], s.buffer_seconds)}</select>`)}
+      ${row("Show mouse cursor", "", check("draw_mouse", s))}`],
+    ["Audio", `
+      ${row("System audio", "Everything on the selected output, including voice chat.", check("system_audio_enabled", s))}
+      ${row("Output device", "", `<select data-k="system_audio_device">${devOpts(d.system, s.system_audio_device)}</select>`)}
+      ${row("System volume", "", `<input type="range" min="0" max="200" step="5" data-k="system_audio_volume" data-num value="${s.system_audio_volume}"><output class="mono muted">${s.system_audio_volume}%</output>`)}
+      ${row("Microphone", "Kept separate and mixed in only when a clip is saved.", check("microphone_enabled", s))}
+      ${row("Microphone device", "", `<select data-k="microphone_device">${devOpts(d.microphone, s.microphone_device)}</select>`)}
+      ${row("Microphone volume", "", `<input type="range" min="0" max="200" step="5" data-k="microphone_volume" data-num value="${s.microphone_volume}"><output class="mono muted">${s.microphone_volume}%</output>`)}
+      ${row("Audio bitrate", "", `<select data-k="audio_bitrate_kbps" data-num>${opt([[96,"96 kbps"],[128,"128 kbps"],[160,"160 kbps"],[192,"192 kbps"]], s.audio_bitrate_kbps)}</select>`)}`],
+    ["Smart Highlights", `
+      ${row("Automatic highlights", "Detects plays from Riot's local game data. Nothing leaves this PC.", check("smart_highlights_enabled", s))}
+      ${row("Sensitivity", "Strict keeps standout plays only; Save more also keeps routine ones.", `<select data-k="smart_sensitivity">${opt([["strict","Strict"],["balanced","Balanced"],["save_more","Save more"]], s.smart_sensitivity)}</select>`)}
+      ${row("Tight event windows", "Cut automatic clips around the fight instead of saving the whole buffer.", check("discord_auto_trim_events", s))}
+      ${row("Single kills", "", check("auto_clip_single_kill", s))}
+      ${row("Double kills", "", check("auto_clip_double_kill", s))}
+      ${row("Triple kills", "", check("auto_clip_triple_kill", s))}
+      ${row("Quadra kills", "", check("auto_clip_quadra_kill", s))}
+      ${row("Pentakills", "", check("auto_clip_pentakill", s))}
+      ${row("Dragon steals", "", check("auto_clip_dragon", s))}
+      ${row("Baron steals", "", check("auto_clip_baron", s))}`],
+    ["Shortcut", `
+      ${row("Save clip shortcut", "Works while League is focused; the key still reaches the game.", `<kbd>${esc(s.hotkey_display)}</kbd><button id="hkBtn">Change</button>`)}`],
+    ["App", `
+      ${row("Launch with Windows", "Starts quietly in the notification area.", check("launch_with_windows", s))}
+      ${row("Start minimized", "Don't open this window when the app is started manually.", check("start_minimized", s))}
+      ${row("Champion art", "Downloads champion icons and splash art from Riot's Data Dragon once, then uses the local copy.", check("champion_art", s))}`],
+    ["Notifications & sharing", `
+      ${row("In-game notifications", "A small toast in the corner of the game when a clip is saved. Click-through; never takes focus.", check("overlay_notifications", s))}
+      ${row("Notify when a clip is saved", "Windows notification when League isn't open.", check("notify_on_save", s))}
+      ${row("Discord upload limit", "Discord copies are encoded to fit under this size.", `<select data-k="discord_target_mb" data-num>${opt([[9.5,"10 MB (free)"],[48,"50 MB (Nitro Basic)"],[480,"500 MB (Nitro)"]], s.discord_target_mb)}</select>`)}`],
+    ["Storage", `
+      ${row("Clip folder", "", `<input type="text" data-k="clip_dir" value="${esc(s.clip_dir)}" style="width:270px">`)}
+      ${row("Automatic clean-up", "Deletes clips older than this. Clips you rated Good are always kept.", `<select data-k="cleanup_days" data-num>${opt([[0,"Off"],[14,"After 14 days"],[30,"After 30 days"],[60,"After 60 days"],[90,"After 90 days"]], s.cleanup_days)}</select>`)}`],
+  ];
+  $("#settingsPage").innerHTML = sections.map(([name, html], i) => `<h3 id="sec${i}">${name}</h3>${html}`).join("");
+  $("#cats").innerHTML = sections.map(([name], i) => `<button data-s="sec${i}" class="${i ? "" : "on"}">${name}</button>`).join("");
+  $$("#cats button").forEach(b => b.onclick = () => { $$("#cats button").forEach(x => x.classList.toggle("on", x === b)); $("#" + b.dataset.s).scrollIntoView({ behavior: "smooth" }); });
+  $$("#settingsPage [data-k]").forEach(el => {
+    el.addEventListener(el.type === "range" ? "input" : "change", () => {
+      if (el.type === "range") el.nextElementSibling.textContent = el.value + "%";
+      clearTimeout(el._t);
+      el._t = setTimeout(() => saveSetting(el), el.type === "range" ? 400 : 0);
+    });
+  });
+  $("#hkBtn").onclick = captureHotkey;
+}
+async function saveSetting(el) {
+  const k = el.dataset.k;
+  let change;
+  if (k === "resolution") { const [w, h] = el.value.split("x").map(Number); change = { width: w, height: h }; }
+  else if (el.type === "checkbox") change = { [k]: el.checked };
+  else if (el.dataset.num !== undefined) change = { [k]: Number(el.value) };
+  else change = { [k]: el.value };
+  try { state.settings = await api("/api/settings", change); toast("Saved"); if (k === "champion_art") loadClips(); }
+  catch (e) { toast(e.message, false); renderSettings(); }
+}
+function setHotkey(h) { state.hotkey = h || "F8"; $("#hkFoot").textContent = state.hotkey; }
+let capturing = false;
+function captureHotkey() {
+  const btn = $("#hkBtn");
+  btn.textContent = "Press keys…"; btn.classList.add("on");
+  capturing = true;
+  api("/api/hotkey-capture", { active: true });
+  const names = { 8:"Backspace",9:"Tab",13:"Enter",19:"Pause",20:"Caps Lock",27:"Esc",32:"Space",33:"Page Up",34:"Page Down",35:"End",36:"Home",37:"Left",38:"Up",39:"Right",40:"Down",44:"Print Screen",45:"Insert",46:"Delete",145:"Scroll Lock" };
+  const onKey = async e => {
+    e.preventDefault(); e.stopPropagation();
+    if ([16, 17, 18, 91, 92].includes(e.keyCode)) return;
+    window.removeEventListener("keydown", onKey, true);
+    capturing = false;
+    const mods = [];
+    if (e.ctrlKey) mods.push("ctrl");
+    if (e.altKey) mods.push("alt");
+    if (e.shiftKey) mods.push("shift");
+    if (e.metaKey) mods.push("win");
+    const key = names[e.keyCode] || (e.keyCode >= 112 && e.keyCode <= 135 ? "F" + (e.keyCode - 111) : e.keyCode >= 96 && e.keyCode <= 105 ? "Num " + (e.keyCode - 96) : e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    const display = [...mods.map(title), key].join("+");
+    await api("/api/hotkey-capture", { active: false });
+    try { state.settings = await api("/api/settings", { hotkey_vk: e.keyCode, hotkey_modifiers: mods, hotkey_display: display }); setHotkey(display); toast("Shortcut set to " + display); }
+    catch (err) { toast(err.message, false); }
+    renderSettings();
+  };
+  window.addEventListener("keydown", onKey, true);
+}
+
+/* ---------- command palette ---------- */
+let palItems = [], palIndex = 0;
+function commands() {
+  const paused = lastStatus && lastStatus.status.paused;
+  return [
+    { name: "Save clip now", ic: "record", hint: state.hotkey, run: saveNow },
+    { name: paused ? "Resume recording" : "Pause recording", ic: paused ? "resume" : "pause", run: toggleRec },
+    { name: "Review new highlights", ic: "play", run: () => openReview() },
+    { name: "Highlights", ic: "grid", run: () => show("home") },
+    { name: "Settings", ic: "gear", run: () => show("settings") },
+    { name: "Status", ic: "pulse", run: () => show("status") },
+    { name: "Open clips folder", ic: "folder", run: openFolder },
+    { name: "Toggle sidebar", ic: "sidebar", hint: "Ctrl B", run: toggleSide },
+    ...state.games.map(g => ({ name: gameName(g) + (g.result ? " · " + g.result : ""), game: g, hint: dateText(g.started), run: () => openGame(g) })),
+  ];
+}
+function drawPalette() {
+  const q = $("#palInput").value.trim().toLowerCase();
+  palItems = commands().filter(c => !q || (c.name + " " + (c.hint || "")).toLowerCase().includes(q));
+  palIndex = Math.min(palIndex, Math.max(0, palItems.length - 1));
+  $("#palList").innerHTML = palItems.map((c, i) => `<div class="pal ${i === palIndex ? "sel" : ""}" data-i="${i}">${c.game ? avatar(c.game, "sm") : icon(c.ic)}<span class="grow">${esc(c.name)}</span><span class="mono muted">${esc(c.hint || "")}</span></div>`).join("") || `<div class="pal muted">No results</div>`;
+  $$("#palList .pal[data-i]").forEach(el => el.onclick = () => runPalette(+el.dataset.i));
+  $("#palList .sel")?.scrollIntoView({ block: "nearest" });
+}
+function openPalette() { $("#palette").classList.add("on"); $("#palInput").value = ""; palIndex = 0; drawPalette(); $("#palInput").focus(); }
+function closePalette() { $("#palette").classList.remove("on"); }
+function runPalette(i) { const c = palItems[i]; closePalette(); if (c) c.run(); }
+$("#palInput").oninput = () => { palIndex = 0; drawPalette(); };
+$("#palette").onclick = e => { if (e.target.id === "palette") closePalette(); };
+
+/* ---------- keyboard ---------- */
+window.addEventListener("keydown", e => {
+  if (capturing) return;
+  const palOpen = $("#palette").classList.contains("on");
+  if (e.ctrlKey && e.key.toLowerCase() === "k") { e.preventDefault(); palOpen ? closePalette() : openPalette(); return; }
+  if (e.ctrlKey && e.key.toLowerCase() === "b") { e.preventDefault(); toggleSide(); return; }
+  if (palOpen) {
+    if (e.key === "Escape") closePalette();
+    else if (e.key === "ArrowDown") { e.preventDefault(); palIndex = Math.min(palIndex + 1, palItems.length - 1); drawPalette(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); palIndex = Math.max(palIndex - 1, 0); drawPalette(); }
+    else if (e.key === "Enter") runPalette(palIndex);
+    return;
+  }
+  const tag = (e.target.tagName || "").toLowerCase();
+  if (["input", "select", "textarea"].includes(tag) || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (e.key === "Escape" && state.sel.size) { clearPicks(); return; }
+  if (e.key === "Escape" && !document.fullscreenElement && state.view !== "home") { show("home"); return; }
+  if (state.view === "review" && state.review) {
+    const k = e.key.toLowerCase();
+    if (k === "k") reviewAct("keep");
+    else if (k === "g") reviewAct("good");
+    else if (k === "d" || e.key === "Delete") reviewAct("delete");
+    else if (e.key === "ArrowRight" && e.shiftKey === false && state.review.i < state.review.queue.length) reviewAct("skip");
+    else if (e.key === " ") { e.preventDefault(); clipActions.toggle && clipActions.toggle(); }
+    return;
+  }
+  if (state.view !== "match" || !state.clip) return;
+  const k = e.key.toLowerCase();
+  if (k === "j" || e.key === "ArrowDown") { e.preventDefault(); stepClip(1); }
+  else if (k === "k" || e.key === "ArrowUp") { e.preventDefault(); stepClip(-1); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); clipActions.seek(-2); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); clipActions.seek(2); }
+  else if (e.key === " ") { e.preventDefault(); clipActions.toggle(); }
+  else if (k === "f") clipActions.fullscreen();
+  else if (k === "c") clipActions.copy();
+  else if (k === "m") clipActions.mute();
+  else if (k === "i") clipActions.setIn();
+  else if (k === "o") clipActions.setOut();
+  else if (k === "g") clipActions.rate("good");
+  else if (k === "b") clipActions.rate("bad");
+  else if (e.key === "Delete") clipActions.remove();
+});
+
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { pollStatus(); loadClips(); } });
+if (innerWidth <= 760) document.body.classList.add("collapsed");
+$("#navHome").classList.add("on");
+api("/api/settings").then(s => { state.settings = s; setHotkey(s.hotkey_display); }).catch(() => {}).finally(async () => {
+  await loadClips();
+  loadStorage();
+  if (location.hash === "#review") { history.replaceState(null, "", "/"); openReview(); }
+  if (location.hash === "#uitest" && window.ipc) {
+    // Developer check (LH_UI_TEST): play the first clip and report playback.
+    try {
+      openGame(state.games[0]);
+      const v = $("#video");
+      v.muted = true; // autoplay without a click is only allowed muted
+      await v.play();
+      await new Promise(r => setTimeout(r, 3000));
+      const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : {};
+      window.ipc.postMessage(`log:uitest played t=${v.currentTime.toFixed(2)} size=${v.videoWidth}x${v.videoHeight} frames=${q.totalVideoFrames} dropped=${q.droppedVideoFrames}`);
+    } catch (e) { window.ipc.postMessage("log:uitest failed " + e); }
+  }
+});
+pollStatus();
+setInterval(pollStatus, 1500);
+</script>
+</body>
+</html>
