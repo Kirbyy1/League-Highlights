@@ -80,6 +80,11 @@ cargo test --release
 .\scripts\package.ps1 -Ffmpeg C:\path\to\ffmpeg.exe
 ```
 
+The package bundles `target\release\ffmpeg.exe` and downloads the FFmpeg
+"essentials" build there if it is missing. FFmpeg is almost all of the
+download, and the essentials build has everything the app uses at about half
+the size of the "full" build, so the copy on your `PATH` is not used.
+
 Needs [Inno Setup 6](https://jrsoftware.org/isinfo.php) for the installer
 (`winget install JRSoftware.InnoSetup`); `-NoInstaller` builds only the zip.
 Tag releases `v2.x.y`: the in-app update check compares against the latest
