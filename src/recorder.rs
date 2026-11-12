@@ -200,15 +200,25 @@ impl Recorder {
                 window.offset_x,
                 window.offset_y
             );
-            self.launch(s, window, encoder, Backend::Ddagrab)?;
-            match self.wait_until_healthy(Duration::from_millis(3500)) {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    log::warn!("ddagrab failed ({error}); retrying with GDI desktop capture");
-                    self.stop();
-                    self.clear_dir();
+            // When NVENC records at a smaller size, the scaled frame goes back
+            // to the GPU first. The plain download pipeline stays as the
+            // fallback, e.g. for laptops whose display adapter is not NVIDIA's.
+            let mut backends = vec![Backend::Ddagrab];
+            if encoder == "h264_nvenc" && output_size(s, window).2 {
+                backends.insert(0, Backend::DdagrabUpload);
+            }
+            for backend in backends {
+                self.launch(s, window, encoder, backend)?;
+                match self.wait_until_healthy(Duration::from_millis(3500)) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => {
+                        log::warn!("Desktop Duplication ({}) failed: {error}", backend.pipeline());
+                        self.stop();
+                        self.clear_dir();
+                    }
                 }
             }
+            log::warn!("Retrying with GDI desktop capture");
         } else {
             log::warn!("This FFmpeg build has no ddagrab filter; using GDI desktop capture");
         }
@@ -262,6 +272,17 @@ impl Recorder {
             if filters.is_empty() {
                 args.extend(["-filter_threads".into(), "1".into()]);
             }
+        }
+        if backend == Backend::DdagrabUpload {
+            // The scaler is the only CPU filter: two slice threads keep 60 fps
+            // from a 1080p source, larger sources get four. `dx` is the D3D11
+            // device the scaled frames are uploaded to.
+            let source_pixels = i64::from(window.width) * i64::from(window.height);
+            let threads = if source_pixels > 2_500_000 { "4" } else { "2" };
+            args.extend(
+                ["-filter_threads", threads, "-init_hw_device", "d3d11va=dx", "-filter_hw_device", "dx"]
+                    .map(String::from),
+            );
         }
         args.extend(capture_args(s, window, backend));
         args.extend(filters);
@@ -417,9 +438,12 @@ impl Recorder {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum Backend {
     Ddagrab,
+    /// Desktop Duplication, CPU downscale, then the small frame is uploaded
+    /// back to a D3D11 texture for NVENC.
+    DdagrabUpload,
     Gdi,
     /// Generated test pattern (self-test without the GPU or a game).
     Synthetic,
@@ -428,9 +452,17 @@ enum Backend {
 impl Backend {
     fn label(self) -> &'static str {
         match self {
-            Backend::Ddagrab => "Desktop Duplication",
+            Backend::Ddagrab | Backend::DdagrabUpload => "Desktop Duplication",
             Backend::Gdi => "GDI desktop fallback",
             Backend::Synthetic => "Synthetic test pattern",
+        }
+    }
+
+    /// Name used in the log to tell the two Desktop Duplication pipelines apart.
+    fn pipeline(self) -> &'static str {
+        match self {
+            Backend::DdagrabUpload => "GPU upload",
+            _ => "direct",
         }
     }
 }
@@ -438,7 +470,7 @@ impl Backend {
 fn capture_args(s: &Settings, w: &GameWindow, backend: Backend) -> Vec<String> {
     let mouse = if s.draw_mouse { "1" } else { "0" };
     match backend {
-        Backend::Ddagrab => vec![
+        Backend::Ddagrab | Backend::DdagrabUpload => vec![
             "-f".into(),
             "lavfi".into(),
             "-i".into(),
@@ -475,24 +507,38 @@ fn capture_args(s: &Settings, w: &GameWindow, backend: Backend) -> Vec<String> {
     }
 }
 
-fn filter_args(s: &Settings, w: &GameWindow, encoder: &str, backend: Backend) -> Vec<String> {
-    // Output the largest even size that fits the chosen resolution with the
-    // window's aspect ratio: no black-bar padding pass and no upscaling.
-    // fast_bilinear costs ~40% less CPU than the default bicubic scaler when
-    // downscaling and is visually equivalent for gameplay clips.
+/// Recorded size and whether the captured frame has to be scaled to get it:
+/// the largest even size that fits the chosen resolution with the window's
+/// aspect ratio (no black-bar padding pass and no upscaling).
+fn output_size(s: &Settings, w: &GameWindow) -> (i32, i32, bool) {
     let (width, height) = fit_within(w.width, w.height, s.width as i32, s.height as i32);
     let resize = width != w.width & !1 || height != w.height & !1;
+    (width, height, resize)
+}
+
+fn filter_args(s: &Settings, w: &GameWindow, encoder: &str, backend: Backend) -> Vec<String> {
+    // fast_bilinear costs ~40% less CPU than the default bicubic scaler when
+    // downscaling and is visually equivalent for gameplay clips.
+    let (width, height, resize) = output_size(s, w);
+    let scale = format!("scale={width}:{height}:flags=fast_bilinear");
     let convert = if resize {
-        format!("scale={width}:{height}:flags=fast_bilinear,format=yuv420p")
+        format!("{scale},format=yuv420p")
     } else {
         "format=yuv420p".to_string()
     };
     match backend {
         // NVENC consumes ddagrab's D3D11 frames directly (zero copy) when no
-        // resize is required. The scale_d3d11 GPU filter would avoid the
-        // download when resizing, but it fails to allocate textures in
-        // current FFmpeg builds, so resizing downloads the frame once.
+        // resize is required.
         Backend::Ddagrab if encoder == "h264_nvenc" && !resize => Vec::new(),
+        // Resizing has to go through the CPU (scale_d3d11 fails to allocate
+        // its textures in current FFmpeg builds), but the small frame goes
+        // back to a D3D11 texture afterwards. Given CPU frames NVENC opens a
+        // CUDA context instead, which costs ~270 MB more private memory
+        // (measured 445 MB vs 174 MB for 1080p -> 720p).
+        Backend::DdagrabUpload => vec![
+            "-vf".into(),
+            format!("hwdownload,format=bgra,{scale},format=nv12,hwupload"),
+        ],
         Backend::Ddagrab => vec!["-vf".into(), format!("hwdownload,format=bgra,{convert}")],
         Backend::Gdi | Backend::Synthetic => vec!["-vf".into(), convert],
     }
@@ -691,6 +737,35 @@ mod tests {
         assert_eq!(fit_within(1600, 900, 1920, 1080), (1600, 900));
         assert_eq!(fit_within(3840, 2160, 1280, 720), (1280, 720));
         assert_eq!(fit_within(1001, 563, 1920, 1080), (1000, 562));
+    }
+
+    #[test]
+    fn nvenc_resize_goes_back_to_the_gpu() {
+        let window = GameWindow {
+            hwnd: 0,
+            pid: 0,
+            title: String::new(),
+            width: 1920,
+            height: 1080,
+            monitor_index: 0,
+            offset_x: 0,
+            offset_y: 0,
+        };
+        let small = Settings { width: 1280, height: 720, ..Settings::default() };
+        assert!(output_size(&small, &window).2);
+        assert_eq!(
+            filter_args(&small, &window, "h264_nvenc", Backend::DdagrabUpload),
+            ["-vf", "hwdownload,format=bgra,scale=1280:720:flags=fast_bilinear,format=nv12,hwupload"]
+        );
+        // The fallback and the other encoders keep CPU frames.
+        assert_eq!(
+            filter_args(&small, &window, "h264_amf", Backend::Ddagrab),
+            ["-vf", "hwdownload,format=bgra,scale=1280:720:flags=fast_bilinear,format=yuv420p"]
+        );
+        // Native size stays zero copy.
+        let native = Settings { width: 1920, height: 1080, ..Settings::default() };
+        assert!(!output_size(&native, &window).2);
+        assert!(filter_args(&native, &window, "h264_nvenc", Backend::Ddagrab).is_empty());
     }
 
     #[test]
