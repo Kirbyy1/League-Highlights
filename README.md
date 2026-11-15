@@ -18,7 +18,7 @@ Python runtime and no Qt. **[Download the latest release](https://github.com/Kir
 
 ![Settings with a category list and flat setting rows](docs/images/settings.png)
 
-<sub>Screenshots use a demo library with placeholder footage.</sub>
+<sub>Screenshots from real matches. Riot IDs and in-game chat are hidden.</sub>
 
 ## Features
 
