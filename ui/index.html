@@ -706,7 +706,22 @@ function bucket(d) {
   const diff = today - new Date(d.getFullYear(), d.getMonth(), d.getDate());
   return diff <= 0 ? "Today" : diff <= day ? "Yesterday" : diff <= 7 * day ? "Last 7 days" : diff <= 30 * day ? "Last 30 days" : "Older";
 }
-function dateText(d) { const b = bucket(d); return (b === "Today" || b === "Yesterday" ? b : d.toLocaleDateString()) + " " + clock(d); }
+/* "just now", "25 min ago", "3 h ago", "yesterday", "4 days ago", "2 weeks ago", "3 months ago". */
+function ago(d) {
+  const min = Math.max(0, (Date.now() - d.getTime()) / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${Math.floor(min)} min ago`;
+  if (min < 24 * 60) return `${Math.floor(min / 60)} h ago`;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const days = Math.round((today - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+  if (days <= 1) return "yesterday";
+  if (days < 14) return `${days} days ago`;
+  if (days < 60) return `${Math.floor(days / 7)} weeks ago`;
+  if (days < 365) return `${Math.floor(days / 30)} months ago`;
+  const years = Math.floor(days / 365);
+  return years === 1 ? "a year ago" : `${years} years ago`;
+}
+function dateText(d) { const b = bucket(d); return (b === "Today" || b === "Yesterday" ? b : d.toLocaleDateString()) + " " + clock(d) + " · " + ago(d); }
 
 async function loadClips() {
   try {
@@ -737,7 +752,7 @@ function renderMatches() {
     last = b;
     const n = g.clips.length;
     const mode = g.mode && String(g.mode).toUpperCase() !== "CLASSIC" ? modeName(g.mode) : "";
-    const sub = [g.ungrouped ? dateText(g.started) : clock(g.started), g.kda, `${n} clip${n === 1 ? "" : "s"}`, esc(mode)].filter(Boolean).join(" · ");
+    const sub = [g.ungrouped ? dateText(g.started) : `${clock(g.started)} · ${ago(g.started)}`, g.kda, `${n} clip${n === 1 ? "" : "s"}`, esc(mode)].filter(Boolean).join(" · ");
     const best = [...g.clips].sort((x, y) => (y.highlight_score || 0) - (x.highlight_score || 0)).slice(0, 3);
     const peek = best.map(c => `<button data-file="${esc(c.file)}" title="${esc(title(c.label))}">${c.has_thumb ? `<img loading="lazy" src="/thumb/${encodeURIComponent(c.file)}" alt="">` : ""}</button>`).join("");
     return `${head}<div class="mrow" data-id="${esc(g.id)}" title="${esc(dateText(g.started))}">
