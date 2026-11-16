@@ -259,7 +259,6 @@ pub fn montage(ff: &Ffmpeg, dir: &Path, clips: &[PathBuf], work: &Path, label: &
     meta.insert("size_bytes".into(), json!(size));
     meta.insert("automatic".into(), json!(false));
     meta.insert("event_kind".into(), json!("montage"));
-    meta.insert("is_match_reel".into(), json!(true));
     meta.insert("reviewed".into(), json!(true));
     meta.insert("rating".into(), json!(""));
     meta.insert("favorite".into(), json!(false));

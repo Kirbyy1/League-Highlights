@@ -180,6 +180,8 @@ h3 .muted { font: 400 12.5px var(--sans); }
 .mrow .peek { display: flex; gap: 6px; flex: none; }
 .mrow .peek button { padding: 0; width: 96px; aspect-ratio: 16 / 9; border-radius: 6px; overflow: hidden; background: var(--raise); box-shadow: 0 0 0 1px var(--line); }
 .mrow .peek img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mrow .peek button { position: relative; }
+.mrow .peek .reeltag { position: absolute; left: 4px; top: 4px; background: var(--accent); color: var(--accent-text); font: 600 10.5px var(--sans); padding: 0 5px; border-radius: 4px; z-index: 1; }
 .mrow .peek button:hover { box-shadow: 0 0 0 2px var(--accent); background: var(--raise); }
 .mrow .more { width: 30px; text-align: right; color: var(--faint); font-size: 12px; flex: none; }
 @media (max-width: 900px) { .mrow .peek button:nth-child(n+2) { display: none; } }
@@ -820,11 +822,14 @@ function renderMatches() {
     const head = b !== last ? `<div class="group">${b}</div>` : "";
     last = b;
     const plays = g.clips.filter(c => !isDeath(c)), deaths = g.clips.length - plays.length;
-    const n = plays.length;
+    const n = plays.filter(c => !isReel(c)).length;
     const mode = g.mode && String(g.mode).toUpperCase() !== "CLASSIC" ? modeName(g.mode) : "";
     const sub = [g.ungrouped ? dateText(g.started) : `${clock(g.started)} · ${ago(g.started)}`, g.kda, `${n} clip${n === 1 ? "" : "s"}`, deaths ? `${deaths} death${deaths === 1 ? "" : "s"}` : "", esc(mode)].filter(Boolean).join(" · ");
-    const best = [...plays].sort((x, y) => (y.favorite ? 1 : 0) - (x.favorite ? 1 : 0) || (y.highlight_score || 0) - (x.highlight_score || 0)).slice(0, 3);
-    const peek = best.map(c => `<button class="${c.has_thumb ? "" : "ok"}" data-file="${esc(c.file)}" title="${esc(clipTitle(c))}">${c.has_thumb ? `<img loading="lazy" src="/thumb/${encodeURIComponent(c.file)}?v=${c.thumb_v || 1}" alt="" onload="this.parentNode.classList.add('ok')" onerror="this.parentNode.classList.add('ok')">` : ""}</button>`).join("");
+    // The newest reel comes first, then the best plays.
+    const reel = plays.filter(isReel).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
+    const top = plays.filter(c => !isReel(c)).sort((x, y) => (y.favorite ? 1 : 0) - (x.favorite ? 1 : 0) || (y.highlight_score || 0) - (x.highlight_score || 0));
+    const best = [...(reel ? [reel] : []), ...top].slice(0, 3);
+    const peek = best.map(c => `<button class="${c.has_thumb ? "" : "ok"}" data-file="${esc(c.file)}" title="${esc(isReel(c) ? "Watch the reel" : clipTitle(c))}">${isReel(c) ? `<span class="reeltag">Reel</span>` : ""}${c.has_thumb ? `<img loading="lazy" src="/thumb/${encodeURIComponent(c.file)}?v=${c.thumb_v || 1}" alt="" onload="this.parentNode.classList.add('ok')" onerror="this.parentNode.classList.add('ok')">` : ""}</button>`).join("");
     return `${head}<div class="mrow" tabindex="0" data-id="${esc(g.id)}" title="${esc(dateText(g.started))}">
       ${avatar(g)}<div class="meta"><div class="name">${esc(gameName(g))}${g.result ? `<span class="${g.result}">${g.result}</span>` : ""}</div><div class="sub">${sub}</div></div>
       <div class="peek">${peek}</div><span class="more">${n > 3 ? "+" + (n - 3) : ""}</span></div>`;
@@ -1124,7 +1129,7 @@ function openGame(game, clip, keepScroll) {
   const best = clip || [...game.clips].sort((a, b) => (b.highlight_score || 0) - (a.highlight_score || 0))[0];
   const plays = game.clips.filter(c => !isDeath(c) && !isReel(c));
   const reel = [...game.clips].filter(isReel).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
-  const n = game.clips.filter(c => !isDeath(c)).length;
+  const n = plays.length;
   const facts = [game.ungrouped ? "" : ago(game.started), (game.ungrouped ? "" : `<span class="mono">${esc(game.started.toLocaleDateString())} ${esc(clock(game.started))}</span>`),
     game.kda && `KDA <span class="mono">${esc(game.kda)}</span>`, game.duration && `<span class="mono">${mmss(game.duration)}</span>`,
     game.mode && esc(modeName(game.mode)), `${n} clip${n === 1 ? "" : "s"}`].filter(Boolean);
@@ -1139,7 +1144,7 @@ function openGame(game, clip, keepScroll) {
       ${plays.length > 1 ? `<button class="${reel ? "" : "outline"}" id="reelMake" title="Pick clips and join them into one video">${icon("film")}${reel ? "New reel" : "Make reel"}</button>` : ""}
     </div>
     <div class="player" id="player"></div>
-    <h3>Clips in this match <span class="muted">${game.clips.filter(c => !isDeath(c)).length}</span></h3>
+    <h3>Clips in this match <span class="muted">${plays.length}${game.clips.some(isReel) ? ` · ${game.clips.filter(isReel).length} reel${game.clips.filter(isReel).length === 1 ? "" : "s"}` : ""}</span></h3>
     <div class="tiles" id="matchTiles">${[...game.clips.filter(isReel), ...game.clips.filter(c => !isDeath(c) && !isReel(c))].map(c => tile(c, false)).join("")}</div>
     ${game.clips.some(isDeath) ? `<div class="deaths"><h3>Your deaths <span class="muted">${game.clips.filter(isDeath).length} · to learn from</span></h3>
     <div class="tiles" id="deathTiles">${game.clips.filter(isDeath).map(c => tile(c, false)).join("")}</div></div>` : ""}`;

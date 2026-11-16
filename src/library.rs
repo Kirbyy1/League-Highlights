@@ -55,7 +55,11 @@ pub fn scan(dir: &Path) -> Vec<Value> {
             continue;
         }
         let mut meta = read_meta(&path.with_extension("json"));
-        if is_copy(&stem, &meta) || meta.get("is_match_reel").and_then(Value::as_bool).unwrap_or(false) {
+        // Match reels from the Python version are hidden; reels made by this
+        // version (event_kind "montage") are listed like any clip.
+        let legacy_reel = meta.get("is_match_reel").and_then(Value::as_bool).unwrap_or(false)
+            && meta.get("event_kind").and_then(Value::as_str) != Some("montage");
+        if is_copy(&stem, &meta) || legacy_reel {
             continue;
         }
         let Ok(info) = entry.metadata() else { continue };
@@ -451,4 +455,28 @@ pub fn trim(ff: &Ffmpeg, source: &Path, start: f64, end: f64, replace: bool) -> 
     write_meta(&final_path.with_extension("json"), &meta).map_err(|e| e.to_string())?;
     thumbnail(ff, &final_path, &final_path.with_extension("jpg"), (new_duration * 0.45).max(0.1));
     Ok(final_path.file_name().unwrap().to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod reel_listing_tests {
+    use super::*;
+
+    #[test]
+    fn reels_are_listed_but_python_reels_stay_hidden() {
+        let dir = std::env::temp_dir().join(format!("lh-reels-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let clip = |name: &str, meta: Value| {
+            fs::write(dir.join(format!("{name}.mp4")), b"x").unwrap();
+            fs::write(dir.join(format!("{name}.json")), meta.to_string()).unwrap();
+        };
+        clip("A_MATCH_REEL_1", json!({"label": "MATCH REEL", "event_kind": "montage", "is_match_reel": true}));
+        clip("B_REEL_PY", json!({"label": "MATCH REEL", "is_match_reel": true}));
+        clip("C_KILL", json!({"label": "SINGLE KILL"}));
+        let names: Vec<String> = scan(&dir).iter().filter_map(|c| c["file"].as_str().map(str::to_string)).collect();
+        let _ = fs::remove_dir_all(&dir);
+        assert!(names.contains(&"A_MATCH_REEL_1.mp4".to_string()), "{names:?}");
+        assert!(names.contains(&"C_KILL.mp4".to_string()));
+        assert!(!names.contains(&"B_REEL_PY.mp4".to_string()));
+    }
 }
