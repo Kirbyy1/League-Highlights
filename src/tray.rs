@@ -42,6 +42,7 @@ const ID_LIBRARY: usize = 12;
 const ID_FOLDER: usize = 13;
 const ID_STARTUP: usize = 14;
 const ID_QUIT: usize = 15;
+const ID_COPY_LAST: usize = 16;
 
 const CLASS: PCWSTR = w!("LeagueHighlightsRustTray");
 static ICON: &[u8] = include_bytes!("../assets/league_highlights.ico");
@@ -67,6 +68,16 @@ fn post(message: u32) {
     if hwnd != 0 {
         unsafe {
             let _ = PostMessageW(Some(HWND(hwnd as *mut _)), message, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
+/// Quit the app (used after starting an update).
+pub fn quit() {
+    let hwnd = HWND_VALUE.load(Ordering::SeqCst);
+    if hwnd != 0 {
+        unsafe {
+            let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_COMMAND, WPARAM(ID_QUIT), LPARAM(0));
         }
     }
 }
@@ -201,18 +212,20 @@ unsafe fn append(menu: HMENU, id: usize, text: &str, flags: windows::Win32::UI::
 unsafe fn show_menu(hwnd: HWND) {
     let Some(ctx) = CONTEXT.get() else { return };
     let Ok(menu) = CreatePopupMenu() else { return };
-    let (state, paused) = {
+    let (state, paused, last) = {
         let s = ctx.status.read().unwrap();
-        (title_case(s.state), s.paused)
+        (title_case(s.state), s.paused, s.last_clip.clone())
     };
+    let last = last.or_else(|| newest_clip(&ctx.cfg.read().unwrap().clip_dir()));
     let hotkey = ctx.cfg.read().unwrap().hotkey_display.clone();
     let none = windows::Win32::UI::WindowsAndMessaging::MENU_ITEM_FLAGS(0);
-    append(menu, 0, &format!("League Highlights â€” {state}"), MF_GRAYED);
+    append(menu, 0, &format!("League Highlights — {state}"), MF_GRAYED);
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     append(menu, ID_LIBRARY, "Open library", none);
     append(menu, ID_SAVE, &format!("Save clip now\t{hotkey}"), none);
     append(menu, ID_TOGGLE, if paused { "Resume recording" } else { "Pause recording" }, none);
     append(menu, ID_FOLDER, "Open clips folder", none);
+    append(menu, ID_COPY_LAST, "Copy last clip", if last.is_some() { none } else { MF_GRAYED });
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     let startup = if crate::win::startup_enabled() { MF_CHECKED } else { none };
     append(menu, ID_STARTUP, "Launch with Windows", startup);
@@ -228,6 +241,15 @@ unsafe fn show_menu(hwnd: HWND) {
     let _ = DestroyMenu(menu);
 }
 
+/// File name of the most recently saved clip in the library.
+fn newest_clip(dir: &std::path::Path) -> Option<String> {
+    crate::library::scan(dir)
+        .into_iter()
+        .filter_map(|c| Some((c["created_at"].as_str()?.to_string(), c["file"].as_str()?.to_string())))
+        .max()
+        .map(|(_, file)| file)
+}
+
 fn command(hwnd: HWND, id: usize) {
     let Some(ctx) = CONTEXT.get() else { return };
     match id {
@@ -237,6 +259,17 @@ fn command(hwnd: HWND, id: usize) {
         }
         ID_TOGGLE => {
             let _ = ctx.tx.send(Cmd::ToggleRecording);
+        }
+        ID_COPY_LAST => {
+            let dir = ctx.cfg.read().unwrap().clip_dir();
+            let last = ctx.status.read().unwrap().last_clip.clone().or_else(|| newest_clip(&dir));
+            match last.map(|f| dir.join(f)).filter(|p| p.is_file()) {
+                Some(path) => match crate::win::copy_files_to_clipboard(&[path]) {
+                    Ok(()) => notify("Clip copied", "Paste it into Discord or any chat."),
+                    Err(e) => notify("Could not copy the clip", &e),
+                },
+                None => notify("No clips yet", "Save a clip first."),
+            }
         }
         ID_FOLDER => {
             let dir = ctx.cfg.read().unwrap().clip_dir();

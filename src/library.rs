@@ -16,7 +16,7 @@ use crate::util::{local_time, now};
 pub fn read_meta(path: &Path) -> Map<String, Value> {
     fs::read_to_string(path)
         .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|t| serde_json::from_str::<Value>(t.trim_start_matches('\u{feff}')).ok())
         .and_then(|v| match v {
             Value::Object(map) => Some(map),
             _ => None,
@@ -205,6 +205,13 @@ pub fn set_rating(path: &Path, rating: &str) -> Result<(), String> {
 }
 
 /// Mark a clip as reviewed (post-match triage) or not.
+pub fn set_favorite(path: &Path, favorite: bool) -> Result<(), String> {
+    let meta_path = path.with_extension("json");
+    let mut meta = read_meta(&meta_path);
+    meta.insert("favorite".into(), json!(favorite));
+    write_meta(&meta_path, &meta).map_err(|e| e.to_string())
+}
+
 pub fn set_reviewed(path: &Path, reviewed: bool) -> Result<(), String> {
     let meta_path = path.with_extension("json");
     let mut meta = read_meta(&meta_path);
@@ -262,7 +269,7 @@ pub fn cleanup(dir: &Path, days: u32, dry_run: bool) -> (usize, u64) {
     let mut count = 0;
     let mut bytes = 0;
     for clip in scan(dir) {
-        if clip["rating"].as_str() == Some("good") {
+        if clip["rating"].as_str() == Some("good") || clip["favorite"].as_bool() == Some(true) {
             continue;
         }
         let created = clip["created_at"].as_str().unwrap_or("");

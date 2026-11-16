@@ -197,6 +197,16 @@ h3 .muted { font: 400 12.5px var(--sans); }
 .gamehead h1 .Defeat { color: var(--bad); font: 500 15px var(--sans); }
 .gamehead .sub { color: var(--faint); font-size: 12.5px; margin-top: 3px; }
 .gamehead .sub .mono { font-size: 12px; }
+/* ---------- favourites, recap, champion filter ---------- */
+.star { color: var(--warn); display: inline-flex; vertical-align: -2px; margin-left: 6px; }
+.star svg { width: 13px; height: 13px; }
+.tools .on.fav { color: var(--warn); }
+.mhead select { max-width: 190px; }
+.mhead .ghost { color: var(--muted); }
+.mrow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.gamehead .grow { flex: 1; }
+.recap .stats { margin: 22px 0 8px; }
+.recap .most { color: var(--muted); margin-top: 10px; }
 /* ---------- loading skeletons ---------- */
 @keyframes skel { 0%, 100% { background-color: var(--raise); } 50% { background-color: var(--hover); } }
 .skel { border-radius: 6px; animation: skel 1.4s ease-in-out infinite; }
@@ -455,6 +465,7 @@ window.addEventListener("error", e => { if (window.ipc) window.ipc.postMessage("
     <section class="view" id="setupView"><div class="col" id="setup"></div></section>
     <section class="view" id="settingsView"><div class="col"><h1>Settings</h1><div class="setwrap"><nav class="cats" id="cats"></nav><div class="sets" id="settingsPage"></div></div></div></section>
     <section class="view" id="liveView"><div id="liveHost"></div></section>
+    <section class="view" id="recapView"><div class="col recap" id="recap"></div></section>
     <section class="view" id="statusView"><div class="col" id="statusPage"></div></section>
   </div>
 </main>
@@ -473,6 +484,11 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const mmss = s => { s = Math.max(0, Math.floor(s || 0)); return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); };
 const title = s => String(s || "").toLowerCase().replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+// "DOUBLE KILL" + 18:32 in game -> "Double kill at 18:32"
+function clipTitle(c) {
+  const base = sentence(c.label || "Clip");
+  return c.event_game_time != null && c.event_kind !== "montage" && c.event_game_time > 0 ? `${base} at ${mmss(c.event_game_time)}` : base;
+}
 // "WAITING FOR LEAGUE" -> "Waiting for League"
 const sentence = s => { const t = String(s || "").toLowerCase().replace(/_/g, " ").replace(/\bleague\b/g, "League"); return t.charAt(0).toUpperCase() + t.slice(1); };
 const size = b => { const u = ["B","KB","MB","GB"]; let i = 0; b = +b || 0; while (b >= 1024 && i < 3) { b /= 1024; i++; } return (i ? b.toFixed(1) : b) + " " + u[i]; };
@@ -513,6 +529,10 @@ const P = {
   send: '<path d="M20.5 3.5 10 14M20.5 3.5l-6.5 17-4-6.5-6.5-4z"/>',
   next: '<path d="m9 5 7 7-7 7"/>',
   back: '<path d="m15 5-7 7 7 7"/>',
+  star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
+  phone: '<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/>',
+  film: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M7.5 5v14M16.5 5v14M3.5 9.5h4M3.5 14.5h4M16.5 9.5h4M16.5 14.5h4"/>',
+  calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
   music: '<path d="M9 18V5.5l11-2V16"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
   upload: '<path d="M12 16V4M7 9l5-5 5 5M4.5 15.5v3a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
@@ -546,7 +566,7 @@ const state = { games: [], clips: [], game: null, clip: null, view: "home", last
 function show(view) {
   state.view = view;
   $$(".view").forEach(v => v.classList.toggle("on", v.id === view + "View"));
-  $("#navHome").classList.toggle("on", view === "home" || view === "review" || view === "match");
+  $("#navHome").classList.toggle("on", view === "home" || view === "review" || view === "match" || view === "recap");
   $("#navSettings").classList.toggle("on", view === "settings");
   $("#navStatus").classList.toggle("on", view === "status");
   $("#navLive").classList.toggle("on", view === "live");
@@ -558,6 +578,7 @@ function show(view) {
   if (view === "settings") loadSettings();
   if (view === "status") renderStatus();
   if (view === "home") renderHome();
+  if (view === "recap") renderRecap();
   if (view === "setup") renderSetup();
   if (view !== "match") { const v = $("#video"); if (v) v.pause(); }
 }
@@ -761,9 +782,13 @@ async function loadClips() {
 }
 
 /* ---------- sidebar ---------- */
+function gameMatchesFilter(g) {
+  if (state.result === "starred") return g.clips.some(c => c.favorite);
+  return !state.result || g.result === state.result;
+}
 function visibleGames() {
   const q = (state.query || "").trim().toLowerCase();
-  return state.games.filter(g => (!state.result || g.result === state.result) && (!q || [g.champion, g.player, g.mode, ...g.clips.map(c => c.label)].join(" ").toLowerCase().includes(q)));
+  return state.games.filter(g => gameMatchesFilter(g) && (!state.champ || g.champion === state.champ) && (!q || [g.champion, g.player, g.mode, ...g.clips.map(c => c.label)].join(" ").toLowerCase().includes(q)));
 }
 function renderMatches() {
   const list = $("#matchList");
@@ -776,12 +801,18 @@ function renderMatches() {
     const n = g.clips.length;
     const mode = g.mode && String(g.mode).toUpperCase() !== "CLASSIC" ? modeName(g.mode) : "";
     const sub = [g.ungrouped ? dateText(g.started) : `${clock(g.started)} · ${ago(g.started)}`, g.kda, `${n} clip${n === 1 ? "" : "s"}`, esc(mode)].filter(Boolean).join(" · ");
-    const best = [...g.clips].sort((x, y) => (y.highlight_score || 0) - (x.highlight_score || 0)).slice(0, 3);
-    const peek = best.map(c => `<button class="${c.has_thumb ? "" : "ok"}" data-file="${esc(c.file)}" title="${esc(title(c.label))}">${c.has_thumb ? `<img loading="lazy" src="/thumb/${encodeURIComponent(c.file)}" alt="" onload="this.parentNode.classList.add('ok')" onerror="this.parentNode.classList.add('ok')">` : ""}</button>`).join("");
-    return `${head}<div class="mrow" data-id="${esc(g.id)}" title="${esc(dateText(g.started))}">
+    const best = [...g.clips].sort((x, y) => (y.favorite ? 1 : 0) - (x.favorite ? 1 : 0) || (y.highlight_score || 0) - (x.highlight_score || 0)).slice(0, 3);
+    const peek = best.map(c => `<button class="${c.has_thumb ? "" : "ok"}" data-file="${esc(c.file)}" title="${esc(clipTitle(c))}">${c.has_thumb ? `<img loading="lazy" src="/thumb/${encodeURIComponent(c.file)}?v=${c.thumb_v || 1}" alt="" onload="this.parentNode.classList.add('ok')" onerror="this.parentNode.classList.add('ok')">` : ""}</button>`).join("");
+    return `${head}<div class="mrow" tabindex="0" data-id="${esc(g.id)}" title="${esc(dateText(g.started))}">
       ${avatar(g)}<div class="meta"><div class="name">${esc(gameName(g))}${g.result ? `<span class="${g.result}">${g.result}</span>` : ""}</div><div class="sub">${sub}</div></div>
       <div class="peek">${peek}</div><span class="more">${n > 3 ? "+" + (n - 3) : ""}</span></div>`;
   }).join("") || `<div class="group">${state.games.length ? "No matches found" : "No matches yet"}</div>`;
+  $$("#matchList .mrow").forEach(el => el.onkeydown = e => {
+    const rows = $$("#matchList .mrow"), i = rows.indexOf(el);
+    if (e.key === "ArrowDown" && rows[i + 1]) { e.preventDefault(); rows[i + 1].focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); (rows[i - 1] || $("#search")).focus(); }
+    else if (e.key === "Enter") { e.preventDefault(); el.click(); }
+  });
   $$("#matchList .mrow").forEach(el => el.onclick = e => {
     const g = state.games.find(x => x.id === el.dataset.id);
     const pick = e.target.closest("[data-file]");
@@ -796,9 +827,9 @@ function tile(c, showGame) {
     ? `${esc(gameName(g))} · ${esc(dateText(new Date(c.created_at)))}`
     : `${c.event_game_time != null ? mmss(c.event_game_time) + " in match · " : ""}${c.automatic ? "Smart" : "Manual"}`;
   return `<button class="tile ${state.clip && state.clip.file === c.file ? "sel" : ""} ${state.sel.has(c.file) ? "picked" : ""}" data-file="${esc(c.file)}">
-    <div class="th ${c.has_thumb ? "" : "ok"}">${c.has_thumb ? `<img loading="lazy" src="/thumb/${encodeURIComponent(c.file)}" alt="" onload="this.parentNode.classList.add('ok')" onerror="this.parentNode.classList.add('ok')">` : ""}
+    <div class="th ${c.has_thumb ? "" : "ok"}">${c.has_thumb ? `<img loading="lazy" src="/thumb/${encodeURIComponent(c.file)}?v=${c.thumb_v || 1}" alt="" onload="this.parentNode.classList.add('ok')" onerror="this.parentNode.classList.add('ok')">` : ""}
       <span class="badge">${mmss(c.duration_seconds)}</span><span class="play">${icon("play")}</span><span class="pick">${icon("check")}</span></div>
-    <div class="cap">${showGame ? avatar(g, "sm") : ""}<div><div class="t">${esc(title(c.label))}${c.rating === "good" ? `<span class="rdot good"></span>` : c.rating === "bad" ? `<span class="rdot bad"></span>` : ""}</div><div class="s">${sub}</div></div></div>
+    <div class="cap">${showGame ? avatar(g, "sm") : ""}<div><div class="t">${esc(clipTitle(c))}${c.favorite ? `<span class="star" title="Starred">${icon("star")}</span>` : ""}${c.rating === "good" ? `<span class="rdot good"></span>` : c.rating === "bad" ? `<span class="rdot bad"></span>` : ""}</div><div class="s">${sub}</div></div></div>
   </button>`;
 }
 function bindTiles(root, showGame) {
@@ -823,20 +854,58 @@ function renderHome() {
     return;
   }
   const fresh = state.clips.filter(c => !c.reviewed).length;
-  const count = r => state.games.filter(g => !r || g.result === r).length;
+  const count = r => state.games.filter(g => r === "starred" ? g.clips.some(c => c.favorite) : !r || g.result === r).length;
+  const champs = {};
+  state.games.forEach(g => { if (g.champion) champs[g.champion] = (champs[g.champion] || 0) + 1; });
+  const champNames = Object.keys(champs).sort((a, b) => champs[b] - champs[a] || a.localeCompare(b));
+  if (state.champ && !champs[state.champ]) state.champ = "";
+  const champSel = champNames.length > 1 ? `<select id="champSel" title="Champion"><option value="">All champions</option>${champNames.map(n => `<option value="${esc(n)}" ${state.champ === n ? "selected" : ""}>${esc(n)} · ${champs[n]}</option>`).join("")}</select>` : "";
   const pill = (r, label) => `<button data-r="${r}" class="${(state.result || "") === r ? "on" : ""}">${label}<span class="n">${count(r).toLocaleString()}</span></button>`;
   $("#home").innerHTML = `
     <div class="mhead"><h1>Matches</h1>
       <div class="find">${icon("search")}<input type="text" id="search" placeholder="Search matches" value="${esc(state.query || "")}"></div>
-      <div class="seg" id="pills">${pill("", "All")}${pill("Victory", "Wins")}${pill("Defeat", "Losses")}</div></div>
+      ${champSel}
+      <div class="seg" id="pills">${pill("", "All")}${pill("Victory", "Wins")}${pill("Defeat", "Losses")}${count("starred") ? pill("starred", "Starred") : ""}</div>
+      <button class="ghost" id="recapBtn" title="Your week in clips">${icon("calendar")}This week</button></div>
     ${fresh ? `<div class="notice"><div class="txt"><b>${fresh} new clip${fresh === 1 ? "" : "s"}</b> to review<div>Keep the good ones and delete the rest.</div></div>
       <button class="outline" id="reviewBtn">${icon("play")}Review</button></div>` : ""}
     <div class="mlist" id="matchList"></div>`;
   renderMatches();
   $("#search").oninput = e => { state.query = e.target.value; renderMatches(); };
+  $("#search").onkeydown = e => { if (e.key === "ArrowDown") { const r = $("#matchList .mrow"); if (r) { e.preventDefault(); r.focus(); } } };
+  if ($("#champSel")) $("#champSel").onchange = e => { state.champ = e.target.value; renderMatches(); };
+  $("#recapBtn").onclick = () => show("recap");
   $$("#pills button").forEach(b => b.onclick = () => { state.result = b.dataset.r; $$("#pills button").forEach(x => x.classList.toggle("on", x === b)); renderMatches(); });
   if ($("#reviewBtn")) $("#reviewBtn").onclick = () => openReview();
 }
+/* ---------- this week ---------- */
+function renderRecap() {
+  const since = Date.now() - 7 * 86400000;
+  const games = state.games.filter(g => !g.ungrouped && g.started.getTime() >= since);
+  const clips = state.clips.filter(c => Date.parse(c.created_at) >= since && c.event_kind !== "montage");
+  const wins = games.filter(g => g.result === "Victory").length, losses = games.filter(g => g.result === "Defeat").length;
+  const champs = {};
+  games.forEach(g => { if (g.champion) champs[g.champion] = (champs[g.champion] || 0) + 1; });
+  const top = Object.entries(champs).sort((a, b) => b[1] - a[1])[0];
+  const best = [...clips].sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0) || (b.highlight_score || 0) - (a.highlight_score || 0)).slice(0, 6);
+  const day = d => d.toLocaleDateString([], { month: "short", day: "numeric" });
+  $("#recap").innerHTML = `
+    <div class="gamehead"><button class="ibtn back" id="recapBack" title="Back to matches (Esc)">${icon("back")}</button>
+      <div><h1>This week</h1><div class="sub">${day(new Date(since))} – ${day(new Date())}</div></div></div>
+    ${games.length || clips.length ? `
+    <div class="stats">
+      <div><b>${games.length}</b><span>Games recorded</span></div>
+      <div><b>${wins}</b><span>Wins</span></div>
+      <div><b>${losses}</b><span>Losses</span></div>
+      <div><b>${clips.length}</b><span>Clips</span></div>
+    </div>
+    ${top ? `<div class="most">Most played: <b>${esc(top[0])}</b> · ${top[1]} game${top[1] === 1 ? "" : "s"}</div>` : ""}
+    ${best.length ? `<h3>Best plays <span class="muted">highest scores this week</span></h3><div class="tiles" id="recapTiles">${best.map(c => tile(c, true)).join("")}</div>` : ""}`
+    : `<div class="empty"><h1>No games this week</h1>Play a game and your best plays show up here.</div>`}`;
+  $("#recapBack").onclick = () => show("home");
+  if ($("#recapTiles")) bindTiles($("#recapTiles"), true);
+}
+
 async function loadStorage() {
   try { const r = await api("/api/storage"); state.storage = r.storage; state.cleanupPreview = r.cleanup_preview; if ($("#storageUse")) $("#storageUse").textContent = storageText(); } catch {}
 }
@@ -915,7 +984,17 @@ async function checkUpdate() {
     state.update = u;
     const b = $("#updBtn");
     b.hidden = !u.available;
-    if (u.available) { b.innerHTML = `${icon("send")}Update ${esc(u.latest)} available`; b.onclick = () => api("/api/action/open-release", {}); }
+    if (u.available) {
+      b.innerHTML = `${icon("send")}Update to ${esc(u.latest)}`;
+      b.title = u.installer ? "Download, check and install the update, then restart" : "Open the release page";
+      b.onclick = async () => {
+        if (!u.installer) { api("/api/action/open-release", {}); return; }
+        if (!confirm(`Install League Highlights ${u.latest} now?\n\nThe app closes, updates and starts again. Your clips and settings are kept.`)) return;
+        b.disabled = true; toast(`Downloading ${u.latest}…`);
+        try { await api("/api/update/install", {}); toast("Installing — the app restarts in a moment"); }
+        catch (e) { b.disabled = false; toast(e.message, false); }
+      };
+    }
   } catch {}
 }
 
@@ -1006,11 +1085,26 @@ function openGame(game, clip, keepScroll) {
       ${avatar(game)}
       <div><h1>${esc(gameName(game))}${game.result ? `<span class="${game.result}">${esc(game.result)}</span>` : ""}</h1>
       <div class="sub">${facts.join(" · ")}</div></div>
+      <span class="grow"></span>
+      ${game.clips.filter(c => c.event_kind !== "montage").length > 1 ? `<button class="outline" id="montageBtn" title="Join this match's clips into one video, in order">${icon("film")}Make montage</button>` : ""}
     </div>
     <div class="player" id="player"></div>
     <h3>Clips in this match <span class="muted">${n}</span></h3>
     <div class="tiles" id="matchTiles">${game.clips.map(c => tile(c, false)).join("")}</div>`;
   $("#backBtn").onclick = () => show("home");
+  if ($("#montageBtn")) $("#montageBtn").onclick = async () => {
+    const parts = game.clips.filter(c => c.event_kind !== "montage").sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+    const btn = $("#montageBtn"); btn.disabled = true;
+    toast(`Making a montage of ${parts.length} clips…`);
+    try {
+      const r = await api("/api/montage", { files: parts.map(c => c.file) });
+      await loadClips();
+      const g = state.games.find(x => x.id === game.id);
+      const made = g && g.clips.find(c => c.file === r.file);
+      toast("Montage ready — use Edit to add music");
+      if (g) openGame(g, made);
+    } catch (e) { toast(e.message, false); btn.disabled = false; }
+  };
   bindTiles($("#matchTiles"), false);
   if (!keepScroll) $("#scroll").scrollTop = 0;
   selectClip(best);
@@ -1039,7 +1133,7 @@ function selectClip(clip) {
   player.classList.remove("editing");
   player.innerHTML = `
     <div class="stage" id="stage">
-      <video id="video" preload="metadata" ${clip.has_thumb ? `poster="/thumb/${encodeURIComponent(clip.file)}"` : ""} src="/media/${encodeURIComponent(clip.file)}"></video>
+      <video id="video" preload="metadata" ${clip.has_thumb ? `poster="/thumb/${encodeURIComponent(clip.file)}?v=${clip.thumb_v || 1}"` : ""} src="/media/${encodeURIComponent(clip.file)}"></video>
       <button class="big" id="bigPlay" title="Play (Space)">${icon("play")}</button>
     </div>
     <div class="scrub" id="scrub"><div class="rail"></div><div class="trim" id="trimSel"></div><div class="played" id="played"></div>
@@ -1055,7 +1149,7 @@ function selectClip(clip) {
       <button class="ibtn" id="fs" title="Fullscreen (F)">${icon("full")}</button>
     </div>
     <div class="cliphead">
-      <div><div class="label">${esc(title(clip.label))}</div>
+      <div><div class="label">${esc(clipTitle(clip))}</div>
       <div class="sub">${esc(dateText(new Date(clip.created_at)))} · ${mmss(dur)} · ${size(clip.size_bytes)}${clip.highlight_score ? " · score " + clip.highlight_score : ""}${clip.edited ? " · edited" : ""}</div></div>
       <div class="tools">
         <button class="outline" id="bEdit" title="Trim the clip or add music (E)">${icon("cut")}Edit</button>
@@ -1064,9 +1158,11 @@ function selectClip(clip) {
           <div class="menu" id="shareMenu">
             <button id="sCopy">${icon("copy")}<span>Copy video<small>Paste into Discord or any chat with Ctrl+V</small></span></button>
             <button id="sDiscord">${icon("send")}<span>Discord-ready copy<small id="sDiscordSub">Fits your upload limit</small></span></button>
+            <button id="sVertical">${icon("phone")}<span>Vertical for TikTok or Shorts<small id="sVerticalSub">9:16, centred on your champion</small></span></button>
             <button id="sReveal">${icon("reveal")}<span>Show in Explorer<small>Open the folder with this file</small></span></button>
           </div>
         </span>
+        <button class="ibtn ${clip.favorite ? "on fav" : ""}" id="bStar" title="${clip.favorite ? "Unstar (S)" : "Star (S): keep it forever and find it under Starred"}">${icon("star")}</button>
         <button class="ibtn ${clip.rating === "good" ? "on good" : ""}" id="rGood" title="Good clip (G): Smart Highlights keeps more like this">${icon("up")}</button>
         <button class="ibtn ${clip.rating === "bad" ? "on bad" : ""}" id="rBad" title="Not impressive (B): Smart Highlights keeps fewer like this">${icon("down")}</button>
         <span class="drop">
@@ -1158,7 +1254,21 @@ function selectClip(clip) {
       loadStorage();
     } catch (e) { toast(e.message, false); }
   };
+  $("#sVertical").onclick = async () => {
+    const [a, b] = editing() ? state.trim : [0, dur];
+    toast(`Making a vertical copy (${(b - a).toFixed(0)}s)…`);
+    try {
+      const r = await api(`/api/clip/${f}/vertical`, { start: a, end: b });
+      toast(`Vertical copy ready${r.copied ? " — copied, paste with Ctrl+V" : ""}`);
+      loadStorage();
+    } catch (e) { toast(e.message, false); }
+  };
+  const star = () => api(`/api/clip/${f}/favorite`, { favorite: !clip.favorite })
+    .then(() => { clip.favorite = !clip.favorite; toast(clip.favorite ? "Starred" : "Unstarred"); loadClips(); })
+    .catch(e => toast(e.message, false));
+  $("#bStar").onclick = star;
   $("#bShare").addEventListener("click", () => {
+    $("#sVerticalSub").textContent = editing() ? "Of the edit range · 9:16" : "9:16, centred on your champion";
     $("#sDiscordSub").textContent = editing() ? `Of the edit range · fits your upload limit` : `Of the whole clip · fits your upload limit`;
   });
 
@@ -1166,7 +1276,7 @@ function selectClip(clip) {
   const rate = r => api(`/api/clip/${f}/rate`, { rating: clip.rating === r ? "" : r }).then(() => { toast(clip.rating === r ? "Rating cleared" : "Thanks — Smart Highlights will learn from this"); loadClips(); }).catch(e => toast(e.message, false));
   $("#rGood").onclick = () => rate("good"); $("#rBad").onclick = () => rate("bad");
   const remove = async () => {
-    if (!confirm(`Delete "${title(clip.label)}"? The video file is removed permanently.`)) return;
+    if (!confirm(`Delete "${clipTitle(clip)}"? The video file is removed permanently.`)) return;
     video.removeAttribute("src"); video.load();
     await api(`/api/clip/${f}/delete`, {}).catch(e => toast(e.message, false));
     state.clip = null; toast("Clip deleted"); loadClips(); loadStorage();
@@ -1182,7 +1292,7 @@ function selectClip(clip) {
   $("#bEdit").onclick = () => editing() ? editor.close() : editor.open();
 
   clipActions = {
-    setIn, setOut, rate, remove, toggle, fullscreen, copy: copyClip,
+    setIn, setOut, rate, remove, toggle, fullscreen, copy: copyClip, star,
     edit: () => editing() ? editor.close() : editor.open(),
     mute: () => setMute(!video.muted),
     seek: d => { video.currentTime = Math.max(0, Math.min(dur, video.currentTime + d)); drawTime(); },
@@ -1412,10 +1522,14 @@ function renderSettings() {
       ${row("Baron steals", "", check("auto_clip_baron", s))}
       ${row("Herald, Voidgrub and Atakhan steals", "", check("auto_clip_other_steals", s))}
       ${row("Winning moment", "Saves the last seconds before the Nexus falls when you win.", check("auto_clip_victory", s))}
+      ${row("Kill clips", "How much of the play before and after a kill.", `<select data-k="timing_kills" data-num>${opt([[-1, "Shorter"], [0, "Normal"], [1, "Longer"]], s.timing_kills)}</select>`)}
+      ${row("Objective clips", "Dragon, Baron and other objective steals.", `<select data-k="timing_objectives" data-num>${opt([[-1, "Shorter"], [0, "Normal"], [1, "Longer"]], s.timing_objectives)}</select>`)}
+      ${row("Teamfight clips", "Fights with several kills, and the winning moment.", `<select data-k="timing_fights" data-num>${opt([[-1, "Shorter"], [0, "Normal"], [1, "Longer"]], s.timing_fights)}</select>`)}
       <div class="set"><div class="l"><div>What Smart Highlights learned</div><div class="h" id="learned">Rate clips or use post-match review to teach it what you like.</div></div>
         <div class="c"><button id="learnReset" class="outline">Reset</button></div></div>`],
     ["Shortcut", `
-      ${row("Save clip shortcut", "Works while League is focused; the key still reaches the game.", `<kbd>${esc(s.hotkey_display)}</kbd><button id="hkBtn">Change</button>`)}`],
+      ${row("Save clip shortcut", "Works while League is focused; the key still reaches the game.", `<kbd>${esc(s.hotkey_display)}</kbd><button id="hkBtn">Change</button>`)}
+      ${row("What the shortcut does", "Start and stop records longer plays: the first press starts, the second saves (up to 5 minutes).", `<select data-k="hotkey_mode">${opt([["save", "Save the last seconds"], ["toggle", "Start and stop a long clip"]], s.hotkey_mode)}</select>`)}`],
     ["App", `
       ${row("Launch with Windows", "Starts quietly in the notification area.", check("launch_with_windows", s))}
       ${row("Start minimized", "Don't open this window when the app is started manually.", check("start_minimized", s))}
@@ -1429,7 +1543,8 @@ function renderSettings() {
     ["Storage", `
       ${row("Space used", "Clips and Discord copies in your clip folder.", `<span class="mono muted" id="storageUse">${storageText()}</span><button id="cleanBtn" class="outline" title="Delete old clips that aren't rated Good">Clean up…</button>`)}
       ${row("Clip folder", "", `<input type="text" data-k="clip_dir" value="${esc(s.clip_dir)}" style="width:270px">`)}
-      ${row("Automatic clean-up", "Deletes clips older than this. Clips you rated Good are always kept.", `<select data-k="cleanup_days" data-num>${opt([[0,"Off"],[14,"After 14 days"],[30,"After 30 days"],[60,"After 60 days"],[90,"After 90 days"]], s.cleanup_days)}</select>`)}`],
+      ${row("Shrink old clips", "Re-encodes clips to about half the size. Starred and Good clips stay as they are. Only runs when no game is open.", `<select data-k="shrink_after_days" data-num>${opt([[0, "Off"], [7, "After 7 days"], [14, "After 14 days"], [30, "After 30 days"], [60, "After 60 days"]], s.shrink_after_days)}</select>`)}
+      ${row("Automatic clean-up", "Deletes clips older than this. Starred clips and clips you rated Good are always kept.", `<select data-k="cleanup_days" data-num>${opt([[0,"Off"],[14,"After 14 days"],[30,"After 30 days"],[60,"After 60 days"],[90,"After 90 days"]], s.cleanup_days)}</select>`)}`],
   ];
   $("#settingsPage").innerHTML = sections.map(([name, html], i) => `<h3 id="sec${i}">${name}</h3>${html}`).join("");
   if ($("#cleanBtn")) $("#cleanBtn").onclick = cleanUp;
@@ -1502,7 +1617,8 @@ function commands() {
     { name: "Save clip now", ic: "record", hint: state.hotkey, run: saveNow },
     { name: paused ? "Resume recording" : "Pause recording", ic: paused ? "resume" : "pause", run: toggleRec },
     { name: "Review new highlights", ic: "play", run: () => openReview() },
-    { name: "Highlights", ic: "grid", run: () => show("home") },
+    { name: "Matches", ic: "grid", run: () => show("home") },
+    { name: "This week", ic: "calendar", run: () => show("recap") },
     { name: "Settings", ic: "gear", run: () => show("settings") },
     { name: "Status", ic: "pulse", run: () => show("status") },
     { name: "Setup check", ic: "check", run: () => show("setup") },
@@ -1558,6 +1674,7 @@ window.addEventListener("keydown", e => {
   else if (e.key === "ArrowRight") { e.preventDefault(); clipActions.seek(2); }
   else if (e.key === " ") { e.preventDefault(); clipActions.toggle(); }
   else if (k === "f") clipActions.fullscreen();
+  else if (k === "s") clipActions.star && clipActions.star();
   else if (k === "c") clipActions.copy();
   else if (k === "e" && clipActions.edit) clipActions.edit();
   else if (k === "m") clipActions.mute();

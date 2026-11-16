@@ -55,6 +55,8 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\LeagueHighlights.exe"; Description: "Open League Highlights"; Flags: nowait postinstall skipifsilent
+; In-app updates run the installer silently: start the new version afterwards.
+Filename: "{app}\LeagueHighlights.exe"; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM LeagueHighlights.exe /F"; Flags: runhidden; RunOnceId: "StopLeagueHighlights"

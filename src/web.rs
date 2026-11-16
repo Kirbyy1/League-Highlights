@@ -360,6 +360,33 @@ fn handle(ctx: &WebCtx, mut request: Request, port: u16, token: &str) {
             let enabled = ctx.cfg.read().unwrap().check_for_updates;
             json_response(&crate::update::status(enabled))
         }
+        (Method::Post, ["api", "update", "install"]) => match crate::update::install() {
+            Ok(version) => {
+                // Give the response time to reach the page, then quit so the
+                // installer can replace the app.
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(800));
+                    crate::tray::quit();
+                });
+                json_response(&json!({ "ok": true, "version": version }))
+            }
+            Err(e) => error(400, &e),
+        },
+        (Method::Post, ["api", "montage"]) => {
+            let body = read_body(&mut request);
+            let paths: Vec<std::path::PathBuf> = body["files"]
+                .as_array()
+                .map(|files| files.iter().filter_map(|f| f.as_str()).filter_map(|f| library::resolve(&clip_dir, f)).collect())
+                .unwrap_or_default();
+            let work = ctx.paths.root.join("export").join(format!("montage-{}", (crate::util::now() * 1000.0) as u64));
+            match ctx.ff.as_ref().ok_or_else(|| "FFmpeg is missing".to_string()).and_then(|ff| crate::media::montage(ff, &clip_dir, &paths, &work)) {
+                Ok(file) => {
+                    library::CHANGES.fetch_add(1, Ordering::Relaxed);
+                    json_response(&json!({ "ok": true, "file": file }))
+                }
+                Err(e) => error(400, &e),
+            }
+        }
         (Method::Get, ["api", "storage"]) => {
             let days = ctx.cfg.read().unwrap().cleanup_days;
             let (count, bytes) = library::cleanup(&clip_dir, days.max(30), true);
@@ -492,6 +519,18 @@ fn clip_action(ctx: &WebCtx, clip: &Path, action: &str, body: &Value) -> Result<
             let (path, size) = crate::share::discord_copy(ff, clip, start, end, target)?;
             let copied = win::copy_files_to_clipboard(std::slice::from_ref(&path)).is_ok();
             Ok(json!({ "ok": true, "file": path.file_name().map(|f| f.to_string_lossy().into_owned()), "size": size, "copied": copied }))
+        }
+        "favorite" => {
+            library::set_favorite(clip, body["favorite"].as_bool().unwrap_or(true))?;
+            Ok(json!({"ok": true}))
+        }
+        "vertical" => {
+            let ff = ctx.ff.as_ref().ok_or("FFmpeg is missing")?;
+            let start = body["start"].as_f64().unwrap_or(0.0).max(0.0);
+            let end = body["end"].as_f64().ok_or("Missing end")?;
+            let path = crate::media::vertical_copy(ff, clip, start, end)?;
+            let copied = win::copy_files_to_clipboard(std::slice::from_ref(&path)).is_ok();
+            Ok(json!({ "ok": true, "file": path.file_name().map(|f| f.to_string_lossy().into_owned()), "copied": copied }))
         }
         "reveal" => {
             win::reveal_in_explorer(clip);

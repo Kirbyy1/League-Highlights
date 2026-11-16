@@ -14,6 +14,7 @@ mod exporter;
 mod ffmpeg;
 mod hotkey;
 mod lcu;
+mod media;
 mod learn;
 mod library;
 mod live;

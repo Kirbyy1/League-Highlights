@@ -33,7 +33,7 @@ pub fn plan(duration: f64, target_bytes: u64, factor: f64) -> Plan {
     Plan { video_kbps, max_height, fps }
 }
 
-fn encoder_args(encoder: &str, kbps: u32) -> Vec<String> {
+pub fn encoder_args(encoder: &str, kbps: u32) -> Vec<String> {
     let (b, max, buf) = (format!("{kbps}k"), format!("{}k", kbps * 13 / 10), format!("{}k", kbps * 2));
     let list: Vec<&str> = match encoder {
         "h264_nvenc" => vec![

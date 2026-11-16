@@ -63,6 +63,34 @@ pub struct Controller {
     finished: HashMap<String, (MatchContext, String)>,
     agent: ureq::Agent,
     last_cleanup: Option<Instant>,
+    /// A long clip in progress (shortcut in start/stop mode): its start and a
+    /// hold that keeps the buffer from being trimmed.
+    long_clip: Option<(f64, Instant, crate::recorder::HoldGuard)>,
+    /// Keeps the buffer until the long clip's export has finished.
+    long_clip_saving: Option<crate::recorder::HoldGuard>,
+}
+
+/// Background jobs (thumbnails, shrinking old clips) run one at a time.
+static JOBS_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// A long clip stops by itself after this long.
+const LONG_CLIP_MAX: Duration = Duration::from_secs(5 * 60);
+/// Footage kept from before the first press of a long clip.
+const LONG_CLIP_LEAD: f64 = 5.0;
+
+/// How much longer or shorter a kind of play is clipped (Settings > Smart
+/// Highlights > Clip length).
+pub fn timing_factor(s: &crate::config::Settings, kind: &str) -> f64 {
+    let step = match kind {
+        "kill" | "assist" => s.timing_kills,
+        "dragon" | "baron" | "objective" => s.timing_objectives,
+        "fight" | "victory" => s.timing_fights,
+        _ => 0,
+    };
+    match step {
+        -1 => 0.7,
+        1 => 1.4,
+        _ => 1.0,
+    }
 }
 
 impl Controller {
@@ -104,6 +132,8 @@ impl Controller {
             finished: HashMap::new(),
             agent: crate::live::local_agent(),
             last_cleanup: None,
+            long_clip: None,
+            long_clip_saving: None,
         }
     }
 
@@ -223,6 +253,9 @@ impl Controller {
                 }
             }
             Cmd::ExportDone(result, label) => {
+                if label == "LONG CLIP" {
+                    self.long_clip_saving = None;
+                }
                 let remaining = self.busy.load(Ordering::SeqCst);
                 match result {
                     Ok(file) => {
@@ -283,6 +316,11 @@ impl Controller {
             }
             return;
         }
+        let toggle = self.cfg.read().unwrap().hotkey_mode == "toggle";
+        if toggle || self.long_clip.is_some() {
+            self.toggle_long_clip(wall, game_time, context.as_ref());
+            return;
+        }
         let request = HighlightRequest {
             label: "MANUAL CLIP".into(),
             event_kind: "manual".into(),
@@ -300,6 +338,38 @@ impl Controller {
         };
         if overlay && self.window.is_some() {
             tray::overlay("Saving clip…", &format!("{hotkey} pressed"), crate::overlay::Tone::Info);
+        }
+    }
+
+    /// Start/stop mode: the first press starts a long clip, the second saves
+    /// everything from 5 s before the first press until now.
+    fn toggle_long_clip(&mut self, wall: f64, game_time: f64, context: Option<&MatchContext>) {
+        let hotkey = self.cfg.read().unwrap().hotkey_display.clone();
+        match self.long_clip.take() {
+            None => {
+                let Some(recorder) = &self.recorder else { return };
+                self.long_clip = Some((wall - LONG_CLIP_LEAD, Instant::now(), recorder.hold()));
+                log::info!("Long clip started");
+                self.announce("Long clip started", &format!("Press {hotkey} again to save it"), crate::overlay::Tone::Info);
+            }
+            Some((start, _, hold)) => {
+                let request = HighlightRequest {
+                    label: "LONG CLIP".into(),
+                    event_kind: "long".into(),
+                    event_started_at: Some(start),
+                    event_ended_at: Some(wall),
+                    event_game_time: (game_time > 0.0).then_some(game_time),
+                    triggered_at_wall: Some(start + LONG_CLIP_LEAD),
+                    highlight_score: 100,
+                    score_reasons: vec!["long clip".into()],
+                    ..Default::default()
+                }
+                .with_context(context);
+                log::info!("Long clip stopped after {:.0}s", wall - start - LONG_CLIP_LEAD);
+                self.long_clip_saving = Some(hold);
+                self.submit(request);
+                self.announce("Saving long clip…", &format!("{:.0}s", wall - start), crate::overlay::Tone::Info);
+            }
         }
     }
 
@@ -332,11 +402,41 @@ impl Controller {
         if days > 0 {
             library::cleanup(&dir, days, false);
         }
+        self.start_background_jobs();
+    }
+
+    /// Redo old thumbnails and shrink old clips (if turned on) in the
+    /// background. Never while a game is running: both use the GPU or CPU,
+    /// and they stop between clips as soon as a game starts.
+    fn start_background_jobs(&self) {
+        let Some(ff) = self.ff.clone() else { return };
+        if self.window.is_some() || self.live.game_present.load(Ordering::SeqCst) {
+            return;
+        }
+        if JOBS_RUNNING.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (dir, shrink_days, height) = {
+            let s = self.cfg.read().unwrap();
+            (s.clip_dir(), s.shrink_after_days, s.height)
+        };
+        let live = self.live.clone();
+        let _ = std::thread::Builder::new().name("clip-jobs".into()).spawn(move || {
+            let keep_going = || !live.game_present.load(Ordering::SeqCst) && find_league_window().is_none();
+            crate::media::refresh_thumbnails(&ff, &dir, &keep_going);
+            crate::media::shrink_old(&ff, &dir, shrink_days, height, &keep_going);
+            JOBS_RUNNING.store(false, Ordering::SeqCst);
+        });
     }
 
     fn submit(&mut self, request: HighlightRequest) {
         let context = self.live.current_match.lock().unwrap().clone();
         let mut request = request.with_context(context.as_ref());
+        if request.automatic {
+            let factor = timing_factor(&self.cfg.read().unwrap(), &request.event_kind);
+            request.pre_seconds *= factor;
+            request.post_seconds *= factor;
+        }
         if request.triggered_at_wall.is_none() {
             request.triggered_at_wall = Some(request.event_ended_at.or(request.event_started_at).unwrap_or_else(now));
         }
@@ -417,6 +517,10 @@ impl Controller {
     }
 
     fn stop_recording(&mut self, reason: &str) {
+        if self.long_clip.take().is_some() {
+            log::warn!("Long clip discarded: recording stopped ({reason})");
+            self.announce("Long clip not saved", "Recording stopped before it was saved.", crate::overlay::Tone::Error);
+        }
         if let Some(recorder) = &self.recorder {
             // Capture health goes in the log so a match can be checked afterwards.
             let d = recorder.diagnostics();
@@ -451,6 +555,12 @@ impl Controller {
     fn poll(&mut self) {
         if self.ff.is_none() {
             return;
+        }
+        if self.long_clip.as_ref().is_some_and(|(_, started, _)| started.elapsed() >= LONG_CLIP_MAX) {
+            log::info!("Long clip reached 5 minutes; saving it");
+            let context = self.live.current_match.lock().unwrap().clone();
+            let game_time = context.as_ref().map_or(0.0, |c| c.duration_seconds);
+            self.toggle_long_clip(now(), game_time, context.as_ref());
         }
         self.maybe_cleanup();
         let found = find_league_window();

@@ -101,7 +101,11 @@ impl Exporter {
         }
 
         let label = request.clean_label();
-        let precise = request.desired_window().filter(|_| s.discord_auto_trim_events && request.automatic);
+        // Long manual clips (shortcut pressed twice) keep their exact window.
+        let long = request.event_kind == "long";
+        let precise = request
+            .desired_window()
+            .filter(|_| long || (s.discord_auto_trim_events && request.automatic));
 
         // Objectives arrive immediately: wait until the post-roll exists.
         let needed_end = precise.map_or_else(|| request.triggered_at_wall.unwrap_or_else(now), |w| w.1);
@@ -154,7 +158,14 @@ impl Exporter {
 
         let work = self.paths.root.join("export").join(format!("{}", (created * 1000.0) as u64));
         fs::create_dir_all(&work).map_err(|e| e.to_string())?;
-        let result = self.mux(&s, &work, &selected, selected_start, selected_end, duration, &partial, &thumb);
+        // Preview frame: just before the play itself, not the first frame.
+        let moment = request
+            .triggered_at_wall
+            .or(request.event_ended_at)
+            .or(request.event_started_at)
+            .map_or(duration / 2.0, |w| w - selected_start);
+        let thumb_at = thumb_time(moment, duration);
+        let result = self.mux(&s, &work, &selected, selected_start, selected_end, &partial, &thumb, thumb_at);
         let _ = fs::remove_dir_all(&work);
         let audio = match result {
             Ok(audio) => audio,
@@ -250,6 +261,8 @@ impl Exporter {
         put("size_bytes", json!(size));
         put("discord_ready", json!(size < 10_000_000));
         put("quality_mode", json!("original_recording"));
+        put("thumb_v", json!(THUMB_VERSION));
+        put("favorite", json!(false));
         write_meta(&output.with_extension("json"), &meta).map_err(|e| e.to_string())?;
         log::info!("Saved clip to {} ({size} bytes, {duration:.1}s)", output.display());
         Ok(output)
@@ -264,9 +277,9 @@ impl Exporter {
         selected: &[TimedSegment],
         start: f64,
         end: f64,
-        duration: f64,
         partial: &Path,
         thumb: &Path,
+        thumb_at: f64,
     ) -> Result<(bool, bool), String> {
         let list = work.join("segments.txt");
         let text: String = selected
@@ -284,7 +297,6 @@ impl Exporter {
             inputs.push((p.clone(), f64::from(s.microphone_volume) / 100.0));
         }
         let flags = (audio.system.is_some(), audio.microphone.is_some());
-        let thumb_at = (duration / 3.0).clamp(0.0, 2.0);
 
         match self.ff.run(&mux_args(s, &list, &inputs, partial, thumb, thumb_at), Duration::from_secs(120)) {
             Ok(()) => Ok(flags),
@@ -297,6 +309,17 @@ impl Exporter {
             Err(error) => Err(format!("Could not save the clip: {}", last_line(&error))),
         }
     }
+}
+
+/// Thumbnails taken at the play; older clips are redone in the background.
+pub const THUMB_VERSION: u64 = 2;
+
+/// Half a second before the play, kept inside the clip.
+pub fn thumb_time(moment: f64, duration: f64) -> f64 {
+    if duration <= 0.0 {
+        return 0.0;
+    }
+    (moment - 0.5).clamp(0.0, (duration - 0.5).max(0.0))
 }
 
 fn mux_args(
@@ -443,6 +466,14 @@ mod tests {
         assert_eq!(trim, 40.0);
         let (selected, _, _, _) = select_tail(&timeline(), 12.0);
         assert_eq!(selected.len(), 6);
+    }
+
+    #[test]
+    fn thumbnail_sits_just_before_the_play() {
+        assert_eq!(thumb_time(12.0, 30.0), 11.5);
+        assert_eq!(thumb_time(0.2, 30.0), 0.0);
+        assert_eq!(thumb_time(40.0, 30.0), 29.5);
+        assert_eq!(thumb_time(5.0, 0.0), 0.0);
     }
 
     #[test]

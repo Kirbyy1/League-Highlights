@@ -94,6 +94,16 @@ pub struct Settings {
     pub check_for_updates: bool,
     /// Show Porofessor's live page in champion select and in game.
     pub live_stats: bool,
+    /// What the clip shortcut does: "save" the last seconds, or "toggle"
+    /// (first press starts a long clip, second press saves it).
+    pub hotkey_mode: String,
+    /// Clip length per kind of play: -1 shorter, 0 normal, 1 longer.
+    pub timing_kills: i32,
+    pub timing_objectives: i32,
+    pub timing_fights: i32,
+    /// Re-encode clips older than this many days to about half the size
+    /// (0 = off). Starred clips are never changed.
+    pub shrink_after_days: u32,
     /// The first-run setup check has been shown.
     pub setup_seen: bool,
 
@@ -154,6 +164,11 @@ impl Default for Settings {
             discord_target_mb: 9.5,
             check_for_updates: true,
             live_stats: false,
+            hotkey_mode: "save".into(),
+            timing_kills: 0,
+            timing_objectives: 0,
+            timing_fights: 0,
+            shrink_after_days: 0,
             setup_seen: false,
             discord_auto_trim_events: true,
             auto_clip_single_kill: true,
@@ -190,7 +205,8 @@ impl Settings {
         let Ok(text) = fs::read_to_string(path) else {
             return Settings::default();
         };
-        let Ok(Value::Object(file)) = serde_json::from_str::<Value>(&text) else {
+        // Notepad and PowerShell may save UTF-8 with a byte-order mark.
+        let Ok(Value::Object(file)) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else {
             log::warn!("settings.json is unreadable; using defaults");
             return Settings::default();
         };
@@ -256,6 +272,15 @@ impl Settings {
         self.hotkey_modifiers.retain(|m| ["ctrl", "alt", "shift", "win"].contains(&m.as_str()));
         if self.hotkey_display.trim().is_empty() {
             self.hotkey_display = "F8".into();
+        }
+        if !["save", "toggle"].contains(&self.hotkey_mode.as_str()) {
+            self.hotkey_mode = "save".into();
+        }
+        self.timing_kills = self.timing_kills.clamp(-1, 1);
+        self.timing_objectives = self.timing_objectives.clamp(-1, 1);
+        self.timing_fights = self.timing_fights.clamp(-1, 1);
+        if ![0, 7, 14, 30, 60].contains(&self.shrink_after_days) {
+            self.shrink_after_days = 0;
         }
         if ![0, 14, 30, 60, 90].contains(&self.cleanup_days) {
             self.cleanup_days = 0;
@@ -333,6 +358,15 @@ fn same_kind(expected: &Value, actual: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn settings_with_a_byte_order_mark_still_load() {
+        let path = std::env::temp_dir().join(format!("lh-bom-{}.json", std::process::id()));
+        std::fs::write(&path, "﻿{\"fps\": 30, \"hotkey_mode\": \"toggle\"}").unwrap();
+        let s = super::Settings::load(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!((s.fps, s.hotkey_mode.as_str()), (30, "toggle"));
+    }
+
     use super::*;
 
     #[test]
