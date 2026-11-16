@@ -248,6 +248,10 @@ body.selecting .tile .pick { display: grid; }
 #selbar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: none; align-items: center; gap: 4px; background: var(--raise); border: 1px solid var(--line); border-radius: 12px; padding: 5px 6px 5px 14px; box-shadow: var(--shadow); z-index: 15; }
 body.selecting #selbar { display: flex; }
 #selbar .count { font-weight: 600; margin-right: 8px; }
+#selReel { display: none; }
+body.reelpick #selReel { display: inline-flex; }
+body.reelpick #selCopy, body.reelpick #selSeen, body.reelpick #selDelete { display: none; }
+.tile .reeltag { position: absolute; left: 7px; top: 7px; background: var(--accent); color: var(--accent-text); font: 600 11px var(--sans); padding: 1px 7px; border-radius: 5px; }
 #selbar .danger { color: var(--bad); }
 .notice { display: flex; align-items: center; gap: 14px; padding: 14px 0; margin-top: 22px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .notice .txt { flex: 1; min-width: 0; }
@@ -482,6 +486,7 @@ window.addEventListener("error", e => { if (window.ipc) window.ipc.postMessage("
   <button id="selCopy" data-icon="copy">Copy</button>
   <button id="selSeen" data-icon="check">Mark reviewed</button>
   <button id="selDelete" class="danger" data-icon="bin">Delete</button>
+  <button id="selReel" class="primary" data-icon="film">Make reel</button>
   <button id="selClear" class="ibtn" title="Clear selection (Esc)" data-icon="wclose"></button>
 </div>
 <div id="toast"></div>
@@ -495,6 +500,7 @@ const mmss = s => { s = Math.max(0, Math.floor(s || 0)); return String(Math.floo
 const title = s => String(s || "").toLowerCase().replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 // "DOUBLE KILL" + 18:32 in game -> "Double kill at 18:32"
 function clipTitle(c) {
+  if (c.label === "MATCH REEL" || c.event_kind === "montage") return `Reel · ${(c.montage_of || []).length || ""} clips`.replace(" ·  clips", "");
   const base = sentence(c.label || "Clip");
   return c.event_game_time != null && c.event_kind !== "montage" && c.event_game_time > 0 ? `${base} at ${mmss(c.event_game_time)}` : base;
 }
@@ -796,7 +802,7 @@ async function loadClips() {
 
 /* ---------- sidebar ---------- */
 const isDeath = c => c.event_kind === "death";
-const isReel = c => c.label === "MATCH REEL";
+const isReel = c => c.label === "MATCH REEL" || c.event_kind === "montage";
 function gameMatchesFilter(g) {
   if (state.result === "starred") return g.clips.some(c => c.favorite);
   return !state.result || g.result === state.result;
@@ -841,9 +847,10 @@ function tile(c, showGame) {
   const g = c._game;
   const sub = showGame
     ? `${esc(gameName(g))} · ${esc(dateText(new Date(c.created_at)))}`
-    : `${c.event_game_time != null ? mmss(c.event_game_time) + " in match · " : ""}${c.automatic ? "Smart" : "Manual"}`;
+    : [isReel(c) ? "" : c.automatic ? "Smart Highlights" : "Saved by you", mmss(c.duration_seconds) + " long"].filter(Boolean).join(" · ");
   return `<button class="tile ${state.clip && state.clip.file === c.file ? "sel" : ""} ${state.sel.has(c.file) ? "picked" : ""}" data-file="${esc(c.file)}">
     <div class="th ${c.has_thumb ? "" : "ok"}">${c.has_thumb ? `<img loading="lazy" src="/thumb/${encodeURIComponent(c.file)}?v=${c.thumb_v || 1}" alt="" onload="this.parentNode.classList.add('ok')" onerror="this.parentNode.classList.add('ok')">` : ""}
+      ${c.label === "MATCH REEL" || c.event_kind === "montage" ? `<span class="reeltag">Reel</span>` : ""}
       <span class="badge">${mmss(c.duration_seconds)}</span><span class="play">${icon("play")}</span><span class="pick">${icon("check")}</span></div>
     <div class="cap">${showGame ? avatar(g, "sm") : ""}<div><div class="t">${esc(clipTitle(c))}${c.favorite ? `<span class="star" title="Starred">${icon("star")}</span>` : ""}${c.rating === "good" ? `<span class="rdot good"></span>` : c.rating === "bad" ? `<span class="rdot bad"></span>` : ""}</div><div class="s">${sub}</div></div></div>
   </button>`;
@@ -853,6 +860,7 @@ function bindTiles(root, showGame) {
     const c = state.clips.find(x => x.file === el.dataset.file);
     if (!c) return;
     // Ctrl/Shift-click (or any click while selecting) toggles selection.
+    if (state.reelFor && isReel(c)) return;
     if (e.ctrlKey || e.shiftKey || state.sel.size) { togglePick(c.file); return; }
     if (showGame || !state.game) openGame(c._game, c); else { selectClip(c); $("#scroll").scrollTo({ top: 0, behavior: "smooth" }); }
   });
@@ -944,13 +952,38 @@ function togglePick(file) {
   state.sel.has(file) ? state.sel.delete(file) : state.sel.add(file);
   drawSelection();
 }
-function clearPicks() { state.sel.clear(); drawSelection(); }
+function clearPicks() { state.sel.clear(); state.reelFor = null; drawSelection(); }
 function drawSelection() {
+  if (!state.sel.size) state.reelFor = null;
   document.body.classList.toggle("selecting", state.sel.size > 0);
-  $("#selCount").textContent = `${state.sel.size} selected`;
+  document.body.classList.toggle("reelpick", !!state.reelFor);
+  if (state.reelFor) {
+    const picked = state.clips.filter(c => state.sel.has(c.file));
+    const total = picked.reduce((a, c) => a + (c.duration_seconds || 0), 0);
+    $("#selCount").textContent = `${picked.length} clip${picked.length === 1 ? "" : "s"} · ${mmss(total)}`;
+    $("#selReel").disabled = picked.length < 2;
+    $("#selReel").title = picked.length < 2 ? "Pick at least two clips" : "Join the ticked clips in the order they happened";
+  } else {
+    $("#selCount").textContent = `${state.sel.size} selected`;
+  }
   $$(".tile").forEach(t => t.classList.toggle("picked", state.sel.has(t.dataset.file)));
 }
 $("#selClear").onclick = clearPicks;
+$("#selReel").onclick = async () => {
+  const gameId = state.reelFor;
+  const parts = state.clips.filter(c => state.sel.has(c.file)).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  if (parts.length < 2) return;
+  const btn = $("#selReel"); btn.disabled = true;
+  toast(`Making a reel of ${parts.length} clips…`);
+  try {
+    const r = await api("/api/montage", { files: parts.map(c => c.file) });
+    clearPicks();
+    await loadClips();
+    const g = state.games.find(x => x.id === gameId);
+    toast("Reel ready — use Edit to add music");
+    if (g) openGame(g, g.clips.find(c => c.file === r.file));
+  } catch (e) { toast(e.message, false); } finally { btn.disabled = false; }
+};
 $("#selCopy").onclick = () => api("/api/clips/copy", { files: [...state.sel] }).then(r => toast(`Copied ${r.copied} clip${r.copied === 1 ? "" : "s"} — paste with Ctrl+V`)).catch(e => toast(e.message, false));
 $("#selSeen").onclick = () => api("/api/clips/reviewed", { files: [...state.sel] }).then(() => { toast("Marked as reviewed"); clearPicks(); loadClips(); });
 $("#selDelete").onclick = async () => {
@@ -1089,6 +1122,8 @@ function openGame(game, clip, keepScroll) {
   state.game = game;
   renderMatches();
   const best = clip || [...game.clips].sort((a, b) => (b.highlight_score || 0) - (a.highlight_score || 0))[0];
+  const plays = game.clips.filter(c => !isDeath(c) && !isReel(c));
+  const reel = [...game.clips].filter(isReel).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
   const n = game.clips.filter(c => !isDeath(c)).length;
   const facts = [game.ungrouped ? "" : ago(game.started), (game.ungrouped ? "" : `<span class="mono">${esc(game.started.toLocaleDateString())} ${esc(clock(game.started))}</span>`),
     game.kda && `KDA <span class="mono">${esc(game.kda)}</span>`, game.duration && `<span class="mono">${mmss(game.duration)}</span>`,
@@ -1100,26 +1135,24 @@ function openGame(game, clip, keepScroll) {
       <div><h1>${esc(gameName(game))}${game.result ? `<span class="${game.result}">${esc(game.result)}</span>` : ""}</h1>
       <div class="sub">${facts.join(" · ")}</div></div>
       <span class="grow"></span>
-      ${game.clips.filter(c => c.event_kind !== "montage" && !isDeath(c)).length > 1 ? `<button class="outline" id="montageBtn" title="Join this match's clips into one video, in order">${icon("film")}Make montage</button>` : ""}
+      ${reel ? `<button class="outline" id="reelWatch" title="Play this match's reel">${icon("play")}Watch reel</button>` : ""}
+      ${plays.length > 1 ? `<button class="${reel ? "" : "outline"}" id="reelMake" title="Pick clips and join them into one video">${icon("film")}${reel ? "New reel" : "Make reel"}</button>` : ""}
     </div>
     <div class="player" id="player"></div>
     <h3>Clips in this match <span class="muted">${game.clips.filter(c => !isDeath(c)).length}</span></h3>
-    <div class="tiles" id="matchTiles">${game.clips.filter(c => !isDeath(c)).map(c => tile(c, false)).join("")}</div>
+    <div class="tiles" id="matchTiles">${[...game.clips.filter(isReel), ...game.clips.filter(c => !isDeath(c) && !isReel(c))].map(c => tile(c, false)).join("")}</div>
     ${game.clips.some(isDeath) ? `<div class="deaths"><h3>Your deaths <span class="muted">${game.clips.filter(isDeath).length} · to learn from</span></h3>
     <div class="tiles" id="deathTiles">${game.clips.filter(isDeath).map(c => tile(c, false)).join("")}</div></div>` : ""}`;
   $("#backBtn").onclick = () => show("home");
-  if ($("#montageBtn")) $("#montageBtn").onclick = async () => {
-    const parts = game.clips.filter(c => c.event_kind !== "montage" && !isDeath(c)).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
-    const btn = $("#montageBtn"); btn.disabled = true;
-    toast(`Making a montage of ${parts.length} clips…`);
-    try {
-      const r = await api("/api/montage", { files: parts.map(c => c.file) });
-      await loadClips();
-      const g = state.games.find(x => x.id === game.id);
-      const made = g && g.clips.find(c => c.file === r.file);
-      toast("Montage ready — use Edit to add music");
-      if (g) openGame(g, made);
-    } catch (e) { toast(e.message, false); btn.disabled = false; }
+  if ($("#reelWatch")) $("#reelWatch").onclick = () => { selectClip(reel); $("#scroll").scrollTo({ top: 0, behavior: "smooth" }); };
+  if ($("#reelMake")) $("#reelMake").onclick = () => {
+    // Start with the three best plays ticked; tick or untick any others.
+    const best = [...plays].sort((x, y) => (y.highlight_score || 0) - (x.highlight_score || 0)).slice(0, 3);
+    state.sel = new Set(best.map(c => c.file));
+    state.reelFor = game.id;
+    drawSelection();
+    $("#matchTiles").scrollIntoView({ behavior: "smooth", block: "start" });
+    toast("Tick the clips for your reel, then Make reel");
   };
   bindTiles($("#matchTiles"), false);
   if ($("#deathTiles")) bindTiles($("#deathTiles"), false);
@@ -1763,7 +1796,7 @@ api("/api/settings").then(s => { state.settings = s; setHotkey(s.hotkey_display)
     // Public screenshots: leave the player's Riot ID out.
     if (shot.has("anon")) state.games.forEach(g => g.player = "");
     const v = shot.get("view");
-    if (v === "match") openGame(state.games[0]);
+    if (v === "match") { openGame(state.games[0]); if (shot.has("reelpick") && $("#reelMake")) $("#reelMake").click(); }
     else if (v === "review") openReview();
     else show(v);
   }

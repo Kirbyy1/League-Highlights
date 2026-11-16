@@ -382,7 +382,7 @@ fn handle(ctx: &WebCtx, mut request: Request, port: u16, token: &str) {
                 .map(|files| files.iter().filter_map(|f| f.as_str()).filter_map(|f| library::resolve(&clip_dir, f)).collect())
                 .unwrap_or_default();
             let work = ctx.paths.root.join("export").join(format!("montage-{}", (crate::util::now() * 1000.0) as u64));
-            match ctx.ff.as_ref().ok_or_else(|| "FFmpeg is missing".to_string()).and_then(|ff| crate::media::montage(ff, &clip_dir, &paths, &work, "MONTAGE")) {
+            match ctx.ff.as_ref().ok_or_else(|| "FFmpeg is missing".to_string()).and_then(|ff| crate::media::montage(ff, &clip_dir, &paths, &work, "MATCH REEL")) {
                 Ok(file) => {
                     library::CHANGES.fetch_add(1, Ordering::Relaxed);
                     json_response(&json!({ "ok": true, "file": file }))
