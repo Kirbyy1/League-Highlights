@@ -8,15 +8,15 @@ support impact, low-health survivals and objective steals automatically.
 Version 2 is a rewrite in Rust: one ~2 MB executable plus `ffmpeg.exe`, with no
 Python runtime and no Qt. **[Download the latest release](https://github.com/Kirbyy1/League-Highlights/releases/latest)**
 
-![Highlights home with stats, a post-match review prompt and clip tiles](docs/images/home.png)
+![Matches page: one row per game with its result, KDA, clip count and best clips](docs/images/home.png)
 
 ## Screenshots
 
-| Match page and player | Post-match review |
+| Match page | Post-match review |
 |---|---|
-| ![Match page with match timeline, custom player and event markers](docs/images/match.png) | ![Review view stepping through a match's new clips](docs/images/review.png) |
+| ![Match page with a slim header, the player and event markers](docs/images/match.png) | ![Review view stepping through a match's new clips](docs/images/review.png) |
 
-![Settings with a category list and flat setting rows](docs/images/settings.png)
+![Settings with a category list, flat rows and switches](docs/images/settings.png)
 
 <sub>Screenshots from real matches. Riot IDs and in-game chat are hidden.</sub>
 
