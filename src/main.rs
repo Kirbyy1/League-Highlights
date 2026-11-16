@@ -15,6 +15,7 @@ mod ffmpeg;
 mod hotkey;
 mod lcu;
 mod media;
+mod ptt;
 mod learn;
 mod library;
 mod live;
@@ -70,6 +71,7 @@ fn main() {
         let _ = settings.save(&paths.settings);
     }
     hotkey::configure(settings.hotkey_vk, &settings.hotkey_modifiers);
+    ptt::configure(settings.mic_push_to_talk, settings.ptt_vk);
     let start_minimized = settings.start_minimized;
     let tracker_retention = f64::from(settings.buffer_seconds + BUFFER_SAFETY_SECONDS + 120);
     let cfg = Arc::new(RwLock::new(settings));
@@ -109,6 +111,7 @@ fn main() {
     let (export_tx, export_rx) = mpsc::channel();
 
     hotkey::start(tx.clone());
+    ptt::start();
 
     let detector = live::Detector::new(paths.root.clone(), cfg.clone(), tx.clone(), tracker.clone(), live.clone());
     let _ = std::thread::Builder::new().name("live-events".into()).spawn(move || detector.run());

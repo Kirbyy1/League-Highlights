@@ -85,10 +85,6 @@ body.collapsed #side { margin-left: -276px; }
 .navs button kbd { margin-left: auto; }
 .navs button[hidden] { display: none; }
 .navs button .dot { margin-left: auto; width: 7px; height: 7px; background: var(--accent); }
-/* Live game: the stats site is a native panel laid over this area. */
-#liveView.on { height: 100%; }
-#liveHost { height: 100%; display: grid; place-items: center; text-align: center; color: var(--muted); padding: 20px; }
-#liveHost a { color: var(--accent); }
 .find { margin: 10px 12px 2px; display: flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 9px; padding: 0 9px; color: var(--faint); }
 .find input { border: none; flex: 1; min-width: 0; padding: 7px 0; outline: none; color: var(--text); }
 .pills { display: flex; gap: 2px; padding: 6px 10px 2px; }
@@ -137,7 +133,6 @@ body.collapsed #side { margin-left: -276px; }
 .top .primary { padding: 6px 12px; margin: 0 4px; }
 .top .primary kbd { color: inherit; border-color: rgba(0, 0, 0, .2); opacity: .7; }
 .top .upd { width: auto; }
-.top #navLive .dot { width: 7px; height: 7px; background: var(--accent); }
 .top .sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; flex: none; }
 @media (max-width: 1050px) { .top .pill .det, .top .brand b { display: none; } }
 .top .grow { flex: 1; align-self: stretch; }
@@ -419,6 +414,21 @@ dl dd { font-family: var(--mono); font-size: 12px; }
 .pal.sel { background: var(--active); }
 #toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(8px); background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 10px; opacity: 0; transition: opacity .16s, transform .16s; pointer-events: none; z-index: 30; font-weight: 500; display: flex; gap: 8px; align-items: center; }
 #toast.on { opacity: 1; transform: translateX(-50%); }
+/* Error note: plain words, stays until read (quiet-desktop-ui). */
+#errnote { position: fixed; right: 30px; bottom: 30px; width: min(440px, calc(100vw - 60px)); background: var(--raise); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); padding: 12px 10px 10px 16px; z-index: 31; display: none; }
+#errnote.on { display: block; animation: fade .16s; }
+#errnote .h { display: flex; align-items: center; gap: 9px; font-weight: 600; }
+#errnote .h .dot { background: var(--bad); width: 8px; height: 8px; }
+#errnote .h .grow { flex: 1; }
+#errnote .msg { font-size: 12px; color: var(--muted); margin: 4px 0 8px 17px; user-select: text; overflow-wrap: anywhere; }
+#errnote .acts { display: flex; justify-content: flex-end; gap: 4px; }
+/* Event icons on the timeline. */
+.scrub .tick { top: -4px; width: 16px; height: 16px; margin-left: -8px; border-radius: 0; background: none; color: var(--c); display: grid; place-items: center; }
+.scrub .tick svg { width: 13px; height: 13px; stroke-width: 2; }
+.share-caption { padding: 6px 8px 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.share-caption input { width: 100%; }
+.deaths h3 { color: var(--muted); }
+.status-list .chk .txt b { font-weight: 550; }
 
 @media (max-width: 760px) {
   #side { position: fixed; inset: 0 auto 0 0; z-index: 8; box-shadow: var(--shadow); }
@@ -444,7 +454,6 @@ window.addEventListener("error", e => { if (window.ipc) window.ipc.postMessage("
     <button id="navHome" class="brand" title="Matches"><img src="/favicon.ico" alt=""><b>League Highlights</b></button>
     <span class="grow"></span>
     <button class="upd" id="updBtn" hidden title="Open the release page"></button>
-    <button id="navLive" hidden title="Live game stats" data-icon="chart">Live game<span class="dot"></span></button>
     <div class="pill" id="statPill" title="Recorder status"><span class="dot" id="dot"></span><div class="txt"><span class="st"><span id="state">Starting</span> <span class="mono muted" id="timer"></span></span><span class="det" id="statusDetail"></span></div></div>
     <button id="btnSave" class="primary" title="Save the last seconds now"><span data-icon="record"></span>Save clip <kbd id="hkFoot">F8</kbd></button>
     <button id="btnToggle" class="ibtn" title="Pause recording" data-icon="pause"></button>
@@ -464,7 +473,6 @@ window.addEventListener("error", e => { if (window.ipc) window.ipc.postMessage("
     <section class="view" id="reviewView"><div class="col" id="review"></div></section>
     <section class="view" id="setupView"><div class="col" id="setup"></div></section>
     <section class="view" id="settingsView"><div class="col"><h1>Settings</h1><div class="setwrap"><nav class="cats" id="cats"></nav><div class="sets" id="settingsPage"></div></div></div></section>
-    <section class="view" id="liveView"><div id="liveHost"></div></section>
     <section class="view" id="recapView"><div class="col recap" id="recap"></div></section>
     <section class="view" id="statusView"><div class="col" id="statusPage"></div></section>
   </div>
@@ -477,6 +485,7 @@ window.addEventListener("error", e => { if (window.ipc) window.ipc.postMessage("
   <button id="selClear" class="ibtn" title="Clear selection (Esc)" data-icon="wclose"></button>
 </div>
 <div id="toast"></div>
+<div id="errnote" role="alert"><div class="h"><span class="dot"></span><span id="errTitle">Something went wrong</span><span class="grow"></span><button id="errLogs">Logs</button><button class="ibtn" id="errClose" title="Close" data-icon="x"></button></div><div class="msg" id="errMsg"></div></div>
 <script>
 "use strict";
 const $ = (s, r = document) => r.querySelector(s);
@@ -529,6 +538,13 @@ const P = {
   send: '<path d="M20.5 3.5 10 14M20.5 3.5l-6.5 17-4-6.5-6.5-4z"/>',
   next: '<path d="m9 5 7 7-7 7"/>',
   back: '<path d="m15 5-7 7 7 7"/>',
+  sword: '<path d="M14.5 4.5H19.5V9.5L10 19l-5-5z"/><path d="M4 20l3-3M13 6l5 5"/>',
+  skull: '<path d="M12 3.5c-4.4 0-7.5 3-7.5 7 0 2.3 1.1 4 2.8 5v2.5c0 .6.4 1 1 1h7.4c.6 0 1-.4 1-1V15.5c1.7-1 2.8-2.7 2.8-5 0-4-3.1-7-7.5-7z"/><circle cx="9.3" cy="11" r="1.4"/><circle cx="14.7" cy="11" r="1.4"/><path d="M11 19v-2M13 19v-2"/>',
+  hand: '<path d="M8 13V6.5a1.5 1.5 0 0 1 3 0V12M11 11V5a1.5 1.5 0 0 1 3 0v6M14 11V6.5a1.5 1.5 0 0 1 3 0V14c0 3.6-2.4 6-6 6-2.6 0-4.3-1.4-5.6-3.6L4 13.7a1.5 1.5 0 0 1 2.5-1.6L8 14"/>',
+  flame: '<path d="M12 21c-3.6 0-6.5-2.6-6.5-6.2 0-3.4 2.6-5.3 3.8-8.8 2.1 1.4 2.6 3.2 2.4 5 1.3-.6 2.3-2 2.4-3.6 2.3 1.9 4.4 4.4 4.4 7.4 0 3.6-2.9 6.2-6.5 6.2z"/>',
+  crown: '<path d="M4 18h16M5 18 3.5 8l4.8 3.5L12 5l3.7 6.5L20.5 8 19 18"/>',
+  flag: '<path d="M6 21V4M6 4h11l-2.5 4L17 12H6"/>',
+  bolt: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
   star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
   phone: '<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/>',
   film: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M7.5 5v14M16.5 5v14M3.5 9.5h4M3.5 14.5h4M16.5 9.5h4M16.5 14.5h4"/>',
@@ -551,7 +567,21 @@ function paintIcons(root = document) {
 paintIcons();
 
 let toastTimer;
+/* Errors get the note in the bottom-right corner; it stays about 20 s, and
+   while the pointer is over it. */
+let errTimer = null;
+function errorNote(message, heading = "Something went wrong") {
+  const n = $("#errnote");
+  $("#errTitle").textContent = heading;
+  $("#errMsg").textContent = message;
+  n.classList.add("on");
+  const arm = () => { clearTimeout(errTimer); errTimer = setTimeout(() => n.classList.remove("on"), 20000); };
+  n.onmouseenter = () => clearTimeout(errTimer);
+  n.onmouseleave = arm;
+  arm();
+}
 function toast(text, ok = true) {
+  if (!ok) { errorNote(text); return; }
   const t = $("#toast"); t.innerHTML = (ok ? icon("check") : "") + esc(text); t.classList.add("on");
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("on"), 2400);
 }
@@ -559,6 +589,12 @@ function toast(text, ok = true) {
 const EVENT_COLORS = {
   CHAMPION_KILL: "#e84057", MULTIKILL: "#f0904a", ASSIST: "#5aa6e8", PLAYER_DEATH: "#8a8a86",
   ACE: "#e8c34a", DRAGON: "#a58bd6", DRAGON_STEAL: "#c4a6f5", BARON: "#9b6be0", BARON_STEAL: "#b98cff", MANUAL_TRIGGER: "#5ed082", OBJECTIVE_STEAL: "#b98cff", VICTORY: "#4cb4ff",
+};
+// Timeline icon for each kind of event (colour from EVENT_COLORS).
+const EVENT_ICONS = {
+  CHAMPION_KILL: "sword", MULTIKILL: "bolt", ASSIST: "hand", PLAYER_DEATH: "skull", ACE: "crown",
+  DRAGON: "flame", DRAGON_STEAL: "flame", BARON: "flame", BARON_STEAL: "flame", OBJECTIVE_STEAL: "flame",
+  MANUAL_TRIGGER: "record", VICTORY: "flag",
 };
 const state = { games: [], clips: [], game: null, clip: null, view: "home", lastClip: null, settings: null, devices: null, trim: [0, 0], result: "", hotkey: "F8", sel: new Set(), review: null, storage: null };
 
@@ -569,9 +605,7 @@ function show(view) {
   $("#navHome").classList.toggle("on", view === "home" || view === "review" || view === "match" || view === "recap");
   $("#navSettings").classList.toggle("on", view === "settings");
   $("#navStatus").classList.toggle("on", view === "status");
-  $("#navLive").classList.toggle("on", view === "live");
   $("#scroll").scrollTop = 0;
-  placeLive();
   if (view !== "match" && view !== "review") { state.game = null; renderMatches(); }
   if (view !== "review") state.review = null;
   stopPreview();
@@ -585,37 +619,9 @@ function show(view) {
 $("#navHome").onclick = () => show("home");
 $("#navSettings").onclick = () => show("settings");
 $("#navStatus").onclick = () => show("status");
-$("#navLive").onclick = () => show("live");
+$("#errClose").onclick = () => $("#errnote").classList.remove("on");
+$("#errLogs").onclick = () => api("/api/action/open-logs", {});
 
-/* ---------- live game stats (Porofessor) ----------
-   The site refuses to load in a frame, so the app lays a second native view
-   over the content area. The page only tells it where to sit. */
-function placeLive() {
-  const url = state.livePage;
-  const host = $("#liveHost");
-  if (state.view === "live") {
-    host.innerHTML = !url ? "No game in progress."
-      : window.ipc ? "Loading live game stats…"
-      : `<a href="${esc(url)}" target="_blank" rel="noopener">Open live game stats on Porofessor</a>`;
-  }
-  if (!window.ipc) return;
-  const visible = state.view === "live" && url && !$("#palette").classList.contains("on");
-  if (!visible) { window.ipc.postMessage(url ? "live:hide" : "live:close"); return; }
-  const r = $("#scroll").getBoundingClientRect(), d = window.devicePixelRatio || 1;
-  window.ipc.postMessage(`live:show:${r.left * d},${r.top * d},${r.width * d},${r.height * d}|${url}`);
-}
-function setLivePage(url) {
-  url = url || null;
-  if (url === state.livePage) return;
-  const first = state.livePage === undefined, was = state.livePage;
-  state.livePage = url;
-  $("#navLive").hidden = !url;
-  // Champion select just started: bring the stats up. Game over: step back.
-  if (url && !was && !first) show("live");
-  else if (!url && state.view === "live") show("home");
-  else placeLive();
-}
-window.addEventListener("resize", placeLive);
 $("#statPill").onclick = () => show("status");
 
 /* ---------- custom title bar (app window only) ---------- */
@@ -658,7 +664,6 @@ async function pollStatus() {
       state.lastClip = st.last_clip;
       if (!first) { toast("Highlight saved"); loadClips(); }
     }
-    setLivePage(s.live_page);
     if (s.library_changes !== state.libraryChanges) {
       const first = state.libraryChanges === undefined;
       state.libraryChanges = s.library_changes;
@@ -676,29 +681,37 @@ $("#btnSave").onclick = saveNow; $("#btnToggle").onclick = toggleRec; $("#btnFol
 
 function renderStatus() {
   const s = lastStatus; if (!s) return;
-  setTimeout(() => {
-    if ($("#runSetup")) $("#runSetup").onclick = () => show("setup");
-    if ($("#statusUpd")) $("#statusUpd").onclick = () => api("/api/action/open-release", {});
-  });
-  const d = s.diagnostics || {}, live = s.live || {}, m = live.match;
+  const d = s.diagnostics || {}, live = s.live || {}, st = s.status;
+  const recording = st.state === "RECORDING" || st.state === "SAVING CLIP";
+  const u = state.update;
+  const item = (tone, head, text) => `<div class="chk"><span class="st ${tone}">${icon(tone === "ok" ? "check" : tone === "fail" ? "x" : tone === "warn" ? "warn" : "info")}</span><div class="txt"><b>${esc(head)}</b><div>${esc(text)}</div></div></div>`;
+  const health = d.drop_rate > 2 ? ["warn", `Dropping ${d.drop_rate.toFixed(1)}% of frames. Try a lower resolution or frame rate.`] : ["ok", recording ? `Smooth · ${d.fps ? d.fps.toFixed(0) : "—"} fps on ${d.encoder || "the encoder"}` : "Starts when a game opens"];
+  const items = [
+    item(recording ? "ok" : "info", sentence(st.state), st.detail || ""),
+    item(s.ffmpeg ? "ok" : "fail", "Video tools", s.ffmpeg ? "FFmpeg is ready" : "FFmpeg is missing: run the setup check"),
+    item(health[0], "Recording quality", health[1]),
+    item(live.connected ? "ok" : "info", "Game data", live.connected ? "Connected: Smart Highlights is watching the game" : "Connects when a game starts"),
+    item((st.warnings || []).length ? "warn" : "ok", "Sound", (st.warnings || []).join("; ") || "System audio and mic are fine"),
+    item(st.last_error ? "warn" : "ok", "Saving clips", st.last_error ? `Last problem: ${st.last_error}` : s.queued ? `${s.queued} clip(s) saving` : "No problems"),
+    item(!u || !u.enabled || !u.available ? "ok" : "info", "Version " + s.version, !u ? "Checking for updates…" : !u.enabled ? "Update check is off" : u.available ? `${u.latest} is available` : "Up to date"),
+  ];
   const rows = [
-    ["State", title(s.status.state)], ["Detail", s.status.detail || "—"],
     ["Encoder", (d.encoder || "—") + (d.hardware_encoder ? " (hardware)" : "")],
     ["Capture", d.capture_backend || "—"], ["Capture health", d.health || "—"],
     ["FPS", d.fps ? d.fps.toFixed(1) : "—"], ["Frames", d.frame || 0],
     ["Dropped / duplicated", (d.dropped_frames || 0) + " / " + (d.duplicated_frames || 0) + (d.drop_rate ? " (" + d.drop_rate.toFixed(2) + "% dropped)" : "")],
     ["Encoder speed", d.speed ? d.speed.toFixed(2) + "×" : "—"],
-    ["Live game data", live.text],
-    ["Current match", m ? `${m.champion_name || "?"} · ${title(m.game_mode)} · ${mmss(m.duration_seconds)} · ${m.kills}/${m.deaths}/${m.assists}` : "—"],
-    ["Save queue", s.queued],
-    ["Audio warnings", (s.status.warnings || []).join("; ") || "None"],
-    ["Last error", s.status.last_error || "None"],
-    ["FFmpeg", s.ffmpeg || "Missing"], ["Version", s.version],
+    ["Game data", live.text || "—"], ["Save queue", s.queued], ["FFmpeg", s.ffmpeg || "Missing"],
   ];
-  const u = state.update;
-  rows.push(["Updates", !u ? "Checking…" : !u.enabled ? "Update check is off" : u.available ? `${u.latest} available` : u.error ? "Couldn't check" : `Up to date (latest ${u.latest || s.version})`]);
-  $("#statusPage").innerHTML = `<div class="rvhead"><h1>Status</h1><span class="grow"></span></div><div class="setupfoot"><button class="primary" id="runSetup">${icon("check")}Run setup check</button>${u && u.available ? `<button id="statusUpd">Get ${esc(u.latest)}</button>` : ""}</div><dl>` + rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("") + "</dl>"
-    + `<p class="legal">League Highlights isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</p>`;
+  const open = state.statusDetails;
+  $("#statusPage").innerHTML = `<div class="rvhead"><h1>Status</h1></div>
+    <div class="checks status-list">${items.join("")}</div>
+    <div class="setupfoot"><button class="outline" id="runSetup">${icon("check")}Run setup check</button>${u && u.available ? `<button id="statusUpd">Get ${esc(u.latest)}</button>` : ""}<span class="grow"></span><button id="statusMore">${open ? "Hide details" : "Show details"}</button></div>
+    ${open ? `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>` : ""}
+    <p class="legal">League Highlights isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</p>`;
+  $("#runSetup").onclick = () => show("setup");
+  if ($("#statusUpd")) $("#statusUpd").onclick = () => $("#updBtn").click();
+  $("#statusMore").onclick = () => { state.statusDetails = !state.statusDetails; renderStatus(); };
 }
 
 /* ---------- data ---------- */
@@ -782,6 +795,8 @@ async function loadClips() {
 }
 
 /* ---------- sidebar ---------- */
+const isDeath = c => c.event_kind === "death";
+const isReel = c => c.label === "MATCH REEL";
 function gameMatchesFilter(g) {
   if (state.result === "starred") return g.clips.some(c => c.favorite);
   return !state.result || g.result === state.result;
@@ -798,10 +813,11 @@ function renderMatches() {
     const b = bucket(g.started);
     const head = b !== last ? `<div class="group">${b}</div>` : "";
     last = b;
-    const n = g.clips.length;
+    const plays = g.clips.filter(c => !isDeath(c)), deaths = g.clips.length - plays.length;
+    const n = plays.length;
     const mode = g.mode && String(g.mode).toUpperCase() !== "CLASSIC" ? modeName(g.mode) : "";
-    const sub = [g.ungrouped ? dateText(g.started) : `${clock(g.started)} · ${ago(g.started)}`, g.kda, `${n} clip${n === 1 ? "" : "s"}`, esc(mode)].filter(Boolean).join(" · ");
-    const best = [...g.clips].sort((x, y) => (y.favorite ? 1 : 0) - (x.favorite ? 1 : 0) || (y.highlight_score || 0) - (x.highlight_score || 0)).slice(0, 3);
+    const sub = [g.ungrouped ? dateText(g.started) : `${clock(g.started)} · ${ago(g.started)}`, g.kda, `${n} clip${n === 1 ? "" : "s"}`, deaths ? `${deaths} death${deaths === 1 ? "" : "s"}` : "", esc(mode)].filter(Boolean).join(" · ");
+    const best = [...plays].sort((x, y) => (y.favorite ? 1 : 0) - (x.favorite ? 1 : 0) || (y.highlight_score || 0) - (x.highlight_score || 0)).slice(0, 3);
     const peek = best.map(c => `<button class="${c.has_thumb ? "" : "ok"}" data-file="${esc(c.file)}" title="${esc(clipTitle(c))}">${c.has_thumb ? `<img loading="lazy" src="/thumb/${encodeURIComponent(c.file)}?v=${c.thumb_v || 1}" alt="" onload="this.parentNode.classList.add('ok')" onerror="this.parentNode.classList.add('ok')">` : ""}</button>`).join("");
     return `${head}<div class="mrow" tabindex="0" data-id="${esc(g.id)}" title="${esc(dateText(g.started))}">
       ${avatar(g)}<div class="meta"><div class="name">${esc(gameName(g))}${g.result ? `<span class="${g.result}">${g.result}</span>` : ""}</div><div class="sub">${sub}</div></div>
@@ -853,7 +869,7 @@ function renderHome() {
     $("#home").innerHTML = `<div class="empty"><h1>No highlights yet</h1>Start a League game in Borderless mode and press <kbd>${esc(state.hotkey)}</kbd>,<br>or let Smart Highlights keep your best plays automatically.</div>`;
     return;
   }
-  const fresh = state.clips.filter(c => !c.reviewed).length;
+  const fresh = state.clips.filter(c => !c.reviewed && !isDeath(c)).length;
   const count = r => state.games.filter(g => r === "starred" ? g.clips.some(c => c.favorite) : !r || g.result === r).length;
   const champs = {};
   state.games.forEach(g => { if (g.champion) champs[g.champion] = (champs[g.champion] || 0) + 1; });
@@ -882,7 +898,7 @@ function renderHome() {
 function renderRecap() {
   const since = Date.now() - 7 * 86400000;
   const games = state.games.filter(g => !g.ungrouped && g.started.getTime() >= since);
-  const clips = state.clips.filter(c => Date.parse(c.created_at) >= since && c.event_kind !== "montage");
+  const clips = state.clips.filter(c => Date.parse(c.created_at) >= since && c.event_kind !== "montage" && !isDeath(c));
   const wins = games.filter(g => g.result === "Victory").length, losses = games.filter(g => g.result === "Defeat").length;
   const champs = {};
   games.forEach(g => { if (g.champion) champs[g.champion] = (champs[g.champion] || 0) + 1; });
@@ -1000,7 +1016,7 @@ async function checkUpdate() {
 
 /* ---------- post-match review ---------- */
 function openReview(matchId) {
-  const fresh = [...state.clips].filter(c => !c.reviewed && (!matchId || c.match_id === matchId));
+  const fresh = [...state.clips].filter(c => !c.reviewed && !isDeath(c) && (!matchId || c.match_id === matchId));
   if (!fresh.length) { toast("All caught up — no new highlights"); show("home"); return; }
   // Review the most recent match first, in match order.
   const game = fresh.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0]._game;
@@ -1009,7 +1025,6 @@ function openReview(matchId) {
   state.game = game;
   $$(".view").forEach(v => v.classList.toggle("on", v.id === "reviewView"));
   state.view = "review";
-  placeLive();
   $("#detail").innerHTML = "";
   renderMatches();
   renderReview();
@@ -1068,14 +1083,13 @@ function openGame(game, clip, keepScroll) {
   if (state.view !== "match") {
     state.view = "match";
     $$(".view").forEach(v => v.classList.toggle("on", v.id === "matchView"));
-    ["#navSettings", "#navStatus", "#navLive"].forEach(s => $(s).classList.remove("on"));
+    ["#navSettings", "#navStatus"].forEach(s => $(s).classList.remove("on"));
     $("#navHome").classList.add("on");
-    placeLive();
   }
   state.game = game;
   renderMatches();
   const best = clip || [...game.clips].sort((a, b) => (b.highlight_score || 0) - (a.highlight_score || 0))[0];
-  const n = game.clips.length;
+  const n = game.clips.filter(c => !isDeath(c)).length;
   const facts = [game.ungrouped ? "" : ago(game.started), (game.ungrouped ? "" : `<span class="mono">${esc(game.started.toLocaleDateString())} ${esc(clock(game.started))}</span>`),
     game.kda && `KDA <span class="mono">${esc(game.kda)}</span>`, game.duration && `<span class="mono">${mmss(game.duration)}</span>`,
     game.mode && esc(modeName(game.mode)), `${n} clip${n === 1 ? "" : "s"}`].filter(Boolean);
@@ -1086,14 +1100,16 @@ function openGame(game, clip, keepScroll) {
       <div><h1>${esc(gameName(game))}${game.result ? `<span class="${game.result}">${esc(game.result)}</span>` : ""}</h1>
       <div class="sub">${facts.join(" · ")}</div></div>
       <span class="grow"></span>
-      ${game.clips.filter(c => c.event_kind !== "montage").length > 1 ? `<button class="outline" id="montageBtn" title="Join this match's clips into one video, in order">${icon("film")}Make montage</button>` : ""}
+      ${game.clips.filter(c => c.event_kind !== "montage" && !isDeath(c)).length > 1 ? `<button class="outline" id="montageBtn" title="Join this match's clips into one video, in order">${icon("film")}Make montage</button>` : ""}
     </div>
     <div class="player" id="player"></div>
-    <h3>Clips in this match <span class="muted">${n}</span></h3>
-    <div class="tiles" id="matchTiles">${game.clips.map(c => tile(c, false)).join("")}</div>`;
+    <h3>Clips in this match <span class="muted">${game.clips.filter(c => !isDeath(c)).length}</span></h3>
+    <div class="tiles" id="matchTiles">${game.clips.filter(c => !isDeath(c)).map(c => tile(c, false)).join("")}</div>
+    ${game.clips.some(isDeath) ? `<div class="deaths"><h3>Your deaths <span class="muted">${game.clips.filter(isDeath).length} · to learn from</span></h3>
+    <div class="tiles" id="deathTiles">${game.clips.filter(isDeath).map(c => tile(c, false)).join("")}</div></div>` : ""}`;
   $("#backBtn").onclick = () => show("home");
   if ($("#montageBtn")) $("#montageBtn").onclick = async () => {
-    const parts = game.clips.filter(c => c.event_kind !== "montage").sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+    const parts = game.clips.filter(c => c.event_kind !== "montage" && !isDeath(c)).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
     const btn = $("#montageBtn"); btn.disabled = true;
     toast(`Making a montage of ${parts.length} clips…`);
     try {
@@ -1106,6 +1122,7 @@ function openGame(game, clip, keepScroll) {
     } catch (e) { toast(e.message, false); btn.disabled = false; }
   };
   bindTiles($("#matchTiles"), false);
+  if ($("#deathTiles")) bindTiles($("#deathTiles"), false);
   if (!keepScroll) $("#scroll").scrollTop = 0;
   selectClip(best);
 }
@@ -1137,7 +1154,7 @@ function selectClip(clip) {
       <button class="big" id="bigPlay" title="Play (Space)">${icon("play")}</button>
     </div>
     <div class="scrub" id="scrub"><div class="rail"></div><div class="trim" id="trimSel"></div><div class="played" id="played"></div>
-      ${(clip.events || []).map(e => `<div class="tick" style="left:${(e.relative_time / Math.max(dur, .1) * 100).toFixed(2)}%;--c:${EVENT_COLORS[e.type] || "#8a8a86"}" title="${esc(title(e.type))}"></div>`).join("")}
+      ${(clip.events || []).map(e => `<div class="tick" style="left:${(e.relative_time / Math.max(dur, .1) * 100).toFixed(2)}%;--c:${EVENT_COLORS[e.type] || "#8a8a86"}" title="${esc(sentence(e.type))}">${icon(EVENT_ICONS[e.type] || "star")}</div>`).join("")}
       <div class="h" id="h0" title="Drag to set the start"></div><div class="h" id="h1" title="Drag to set the end"></div><div class="head" id="head"></div><div class="hover" id="hoverT"></div></div>
     <div class="controls">
       <button class="ibtn" id="pp" title="Play (Space)">${icon("play")}</button>
@@ -1156,6 +1173,7 @@ function selectClip(clip) {
         <span class="drop">
           <button class="outline" id="bShare" title="Copy, make a Discord copy or show the file">${icon("send")}Share</button>
           <div class="menu" id="shareMenu">
+            <div class="share-caption"><input type="text" id="sCaption" maxlength="80" placeholder="Caption for copies (optional)" value="${esc(state.caption || "")}"></div>
             <button id="sCopy">${icon("copy")}<span>Copy video<small>Paste into Discord or any chat with Ctrl+V</small></span></button>
             <button id="sDiscord">${icon("send")}<span>Discord-ready copy<small id="sDiscordSub">Fits your upload limit</small></span></button>
             <button id="sVertical">${icon("phone")}<span>Vertical for TikTok or Shorts<small id="sVerticalSub">9:16, centred on your champion</small></span></button>
@@ -1244,12 +1262,15 @@ function selectClip(clip) {
   const f = encodeURIComponent(clip.file);
   const copyClip = () => api(`/api/clip/${f}/copy`, {}).then(() => toast("Video copied — paste with Ctrl+V")).catch(e => toast(e.message, false));
   $("#sCopy").onclick = copyClip;
+  // Typing a caption must not close the menu.
+  $("#sCaption").onclick = e => e.stopPropagation();
+  $("#sCaption").oninput = e => { state.caption = e.target.value; };
   $("#sReveal").onclick = () => api(`/api/clip/${f}/reveal`, {});
   $("#sDiscord").onclick = async () => {
     const [a, b] = editing() ? state.trim : [0, dur];
     toast(`Making a Discord copy (${(b - a).toFixed(0)}s)…`);
     try {
-      const r = await api(`/api/clip/${f}/discord`, { start: a, end: b });
+      const r = await api(`/api/clip/${f}/discord`, { start: a, end: b, caption: $("#sCaption").value });
       toast(`Discord copy ready (${size(r.size)})${r.copied ? " — copied, paste with Ctrl+V" : ""}`);
       loadStorage();
     } catch (e) { toast(e.message, false); }
@@ -1258,7 +1279,7 @@ function selectClip(clip) {
     const [a, b] = editing() ? state.trim : [0, dur];
     toast(`Making a vertical copy (${(b - a).toFixed(0)}s)…`);
     try {
-      const r = await api(`/api/clip/${f}/vertical`, { start: a, end: b });
+      const r = await api(`/api/clip/${f}/vertical`, { start: a, end: b, caption: $("#sCaption").value });
       toast(`Vertical copy ready${r.copied ? " — copied, paste with Ctrl+V" : ""}`);
       loadStorage();
     } catch (e) { toast(e.message, false); }
@@ -1309,7 +1330,8 @@ function buildEditor(clip, video, dur, drawTrim, drawTime) {
   const prefs = { track: store.get("lh.edit.track", ""), offset: 0, music: store.get("lh.edit.music", 80), game: 100, fade: store.get("lh.edit.fade", true), replace: false };
   let previewing = false;
   const api_ = {};
-  const needsMix = () => !!prefs.track || prefs.game !== 100;
+  prefs.speed = 1;
+  const needsMix = () => !!prefs.track || prefs.game !== 100 || prefs.speed !== 1;
 
   const render = () => {
     const tracks = state.music || [];
@@ -1330,6 +1352,7 @@ function buildEditor(clip, video, dur, drawTrim, drawTime) {
       ${track ? row("Start song at", "Which part of the song plays with the clip.", `<input type="range" id="eOffset" min="0" max="${maxOffset}" step="1" value="${prefs.offset}"><output class="mono muted">${mmss(prefs.offset)}</output>`) : ""}
       ${track ? row("Music volume", "", `<input type="range" id="eMusic" min="0" max="200" step="5" value="${prefs.music}"><output class="mono muted">${prefs.music}%</output>`) : ""}
       ${row("Game volume", track ? "Lower it so the music sits on top." : "", `<input type="range" id="eGame" min="0" max="200" step="5" value="${prefs.game}"><output class="mono muted">${prefs.game}%</output>`)}
+      ${row("Speed", prefs.speed !== 1 ? `${prefs.speed === .5 ? "Twice" : "Four times"} as long: trim to the moment you want slowed. The video is re-encoded.` : "Slow down the trimmed part of the clip.", `<select id="eSpeed">${opt([[1, "Normal"], [0.5, "Slow motion 0.5×"], [0.25, "Slow motion 0.25×"]], prefs.speed)}</select>`)}
       ${track ? row("Fade music in and out", "", `<input type="checkbox" id="eFade" ${prefs.fade ? "checked" : ""}>`) : ""}
       <div class="efoot">
         <span class="muted">Save as</span>
@@ -1393,7 +1416,7 @@ function buildEditor(clip, video, dur, drawTrim, drawTime) {
       if (needsMix()) {
         r = await api(`/api/clip/${encodeURIComponent(clip.file)}/edit`, {
           start: a, end: b, music: prefs.track, music_offset: prefs.offset,
-          music_volume: prefs.music / 100, game_volume: prefs.game / 100, fade: prefs.fade,
+          music_volume: prefs.music / 100, game_volume: prefs.game / 100, fade: prefs.fade, speed: prefs.speed,
         });
       } else {
         if (prefs.replace) { video.removeAttribute("src"); video.load(); }
@@ -1440,6 +1463,7 @@ function buildEditor(clip, video, dur, drawTrim, drawTime) {
     slider("#eMusic", "music", v => v + "%", "lh.edit.music");
     slider("#eGame", "game", v => v + "%", null, true);
     if ($("#eFade")) $("#eFade").onchange = e => { prefs.fade = e.target.checked; store.set("lh.edit.fade", prefs.fade); };
+  $("#eSpeed").onchange = e => { prefs.speed = Number(e.target.value); render(); };
     $$("input[name=eMode]").forEach(r => r.onchange = () => { prefs.replace = r.value === "replace" && r.checked; });
     $("#ePreview").onclick = () => previewing ? stopPreviewing() : startPreviewing();
     $("#eSave").onclick = save;
@@ -1483,7 +1507,7 @@ async function loadSettings() {
   } catch (e) { toast(e.message, false); }
 }
 const opt = (list, value) => list.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(value) ? "selected" : ""}>${esc(l)}</option>`).join("");
-const devOpts = (list, value) => `<option value="">Windows default</option>` + [...new Set([...(value ? [value] : []), ...list])].map(n => `<option ${n === value ? "selected" : ""}>${esc(n)}</option>`).join("");
+const devOpts = (list, value, auto) => `<option value="">${auto ? "Automatic · " + esc(auto) : "Automatic (Windows default)"}</option>` + [...new Set([...(value ? [value] : []), ...list])].map(n => `<option ${n === value ? "selected" : ""}>${esc(n)}</option>`).join("");
 const row = (label, help, control) => `<div class="set"><div class="l"><div>${label}</div>${help ? `<div class="h">${help}</div>` : ""}</div><div class="c">${control}</div></div>`;
 const check = (key, s) => `<input type="checkbox" data-k="${key}" ${s[key] ? "checked" : ""}>`;
 function renderSettings() {
@@ -1503,10 +1527,12 @@ function renderSettings() {
       ${row("Show mouse cursor", "", check("draw_mouse", s))}`],
     ["Audio", `
       ${row("System audio", "Everything on the selected output, including voice chat.", check("system_audio_enabled", s))}
-      ${row("Output device", "", `<select data-k="system_audio_device">${devOpts(d.system, s.system_audio_device)}</select>`)}
+      ${row("Output device", "", `<select data-k="system_audio_device">${devOpts(d.system, s.system_audio_device, d.default_output)}</select>`)}
       ${row("System volume", "", `<input type="range" min="0" max="200" step="5" data-k="system_audio_volume" data-num value="${s.system_audio_volume}"><output class="mono muted">${s.system_audio_volume}%</output>`)}
       ${row("Microphone", "Kept separate and mixed in only when a clip is saved.", check("microphone_enabled", s))}
-      ${row("Microphone device", "", `<select data-k="microphone_device">${devOpts(d.microphone, s.microphone_device)}</select>`)}
+      ${row("Microphone device", "Automatic uses the mic Windows gives Discord and voice chat, and follows it if you plug in a headset.", `<select data-k="microphone_device">${devOpts(d.microphone, s.microphone_device, d.default_microphone)}</select>`)}
+      ${row("Cut background noise", "Keeps keyboard clicks, fans and breathing between words out of clips.", check("mic_noise_gate", s))}
+      ${row("Push to talk", "Keep your mic in clips only while you hold a key or mouse side button, like in Discord.", `${check("mic_push_to_talk", s)}<kbd>${esc(s.ptt_display || "No key")}</kbd><button id="pttBtn">${s.ptt_display ? "Change" : "Choose key"}</button>`)}
       ${row("Microphone volume", "", `<input type="range" min="0" max="200" step="5" data-k="microphone_volume" data-num value="${s.microphone_volume}"><output class="mono muted">${s.microphone_volume}%</output>`)}
       ${row("Audio bitrate", "", `<select data-k="audio_bitrate_kbps" data-num>${opt([[96,"96 kbps"],[128,"128 kbps"],[160,"160 kbps"],[192,"192 kbps"]], s.audio_bitrate_kbps)}</select>`)}`],
     ["Smart Highlights", `
@@ -1522,6 +1548,8 @@ function renderSettings() {
       ${row("Baron steals", "", check("auto_clip_baron", s))}
       ${row("Herald, Voidgrub and Atakhan steals", "", check("auto_clip_other_steals", s))}
       ${row("Winning moment", "Saves the last seconds before the Nexus falls when you win.", check("auto_clip_victory", s))}
+      ${row("Save my deaths", "Keeps your deaths in their own section of each match, to learn from. They never go into Review.", check("auto_clip_deaths", s))}
+      ${row("Match reel", "After each game, joins its three best plays into one video.", check("auto_reel", s))}
       ${row("Kill clips", "How much of the play before and after a kill.", `<select data-k="timing_kills" data-num>${opt([[-1, "Shorter"], [0, "Normal"], [1, "Longer"]], s.timing_kills)}</select>`)}
       ${row("Objective clips", "Dragon, Baron and other objective steals.", `<select data-k="timing_objectives" data-num>${opt([[-1, "Shorter"], [0, "Normal"], [1, "Longer"]], s.timing_objectives)}</select>`)}
       ${row("Teamfight clips", "Fights with several kills, and the winning moment.", `<select data-k="timing_fights" data-num>${opt([[-1, "Shorter"], [0, "Normal"], [1, "Longer"]], s.timing_fights)}</select>`)}
@@ -1534,8 +1562,7 @@ function renderSettings() {
       ${row("Launch with Windows", "Starts quietly in the notification area.", check("launch_with_windows", s))}
       ${row("Start minimized", "Don't open this window when the app is started manually.", check("start_minimized", s))}
       ${row("Champion art", "Downloads champion icons and splash art from Riot's Data Dragon once, then uses the local copy.", check("champion_art", s))}
-      ${row("Check for updates", "Looks for a newer release on GitHub every few hours and shows a link. Nothing installs automatically.", check("check_for_updates", s))}
-      ${row("Live game stats", "Shows Porofessor for your game in champion select and in game. Your Riot ID and server are sent to porofessor.gg.", check("live_stats", s))}`],
+      ${row("Check for updates", "Looks for a newer release on GitHub every few hours. Update now downloads it, checks it and restarts the app.", check("check_for_updates", s))}`],
     ["Notifications & sharing", `
       ${row("In-game notifications", "A small toast in the corner of the game when a clip is saved. Click-through; never takes focus.", check("overlay_notifications", s))}
       ${row("Notify when a clip is saved", "Windows notification when League isn't open.", check("notify_on_save", s))}
@@ -1558,6 +1585,7 @@ function renderSettings() {
     });
   });
   $("#hkBtn").onclick = captureHotkey;
+  if ($("#pttBtn")) $("#pttBtn").onclick = capturePtt;
   api("/api/learning").then(l => {
     const fmt = list => list.map(([k, v]) => `${esc(k)} (${v > 0 ? "+" : ""}${v})`).join(", ");
     const parts = [];
@@ -1609,6 +1637,39 @@ function captureHotkey() {
   window.addEventListener("keydown", onKey, true);
 }
 
+/* Push-to-talk key: any key, or a mouse side or middle button. */
+function capturePtt() {
+  const btn = $("#pttBtn");
+  btn.textContent = "Press a key or mouse button…"; btn.classList.add("on");
+  capturing = true;
+  api("/api/hotkey-capture", { active: true });
+  const finish = async (vk, display) => {
+    window.removeEventListener("keydown", onKey, true);
+    window.removeEventListener("mousedown", onMouse, true);
+    capturing = false;
+    await api("/api/hotkey-capture", { active: false });
+    try { state.settings = await api("/api/settings", { ptt_vk: vk, ptt_display: display, mic_push_to_talk: true }); toast("Push to talk: " + display); }
+    catch (err) { toast(err.message, false); }
+    renderSettings();
+  };
+  const onKey = e => {
+    e.preventDefault(); e.stopPropagation();
+    if (e.key === "Escape") { finish(state.settings.ptt_vk || 0, state.settings.ptt_display || ""); return; }
+    const named = { 16: "Shift", 17: "Ctrl", 18: "Alt", 20: "Caps Lock", 32: "Space", 9: "Tab", 192: "`" };
+    const key = named[e.keyCode] || (e.keyCode >= 112 && e.keyCode <= 135 ? "F" + (e.keyCode - 111) : e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    finish(e.keyCode, key);
+  };
+  // Mouse buttons: middle = 4, back = 5, forward = 6 (Windows key codes).
+  const onMouse = e => {
+    const map = { 1: [4, "Middle mouse"], 3: [5, "Mouse 4"], 4: [6, "Mouse 5"] };
+    if (!map[e.button]) return;
+    e.preventDefault(); e.stopPropagation();
+    finish(...map[e.button]);
+  };
+  window.addEventListener("keydown", onKey, true);
+  window.addEventListener("mousedown", onMouse, true);
+}
+
 /* ---------- command palette ---------- */
 let palItems = [], palIndex = 0;
 function commands() {
@@ -1634,8 +1695,8 @@ function drawPalette() {
   $$("#palList .pal[data-i]").forEach(el => el.onclick = () => runPalette(+el.dataset.i));
   $("#palList .sel")?.scrollIntoView({ block: "nearest" });
 }
-function openPalette() { $("#palette").classList.add("on"); placeLive(); $("#palInput").value = ""; palIndex = 0; drawPalette(); $("#palInput").focus(); }
-function closePalette() { $("#palette").classList.remove("on"); placeLive(); }
+function openPalette() { $("#palette").classList.add("on"); $("#palInput").value = ""; palIndex = 0; drawPalette(); $("#palInput").focus(); }
+function closePalette() { $("#palette").classList.remove("on"); }
 function runPalette(i) { const c = palItems[i]; closePalette(); if (c) c.run(); }
 $("#palInput").oninput = () => { palIndex = 0; drawPalette(); };
 $("#palette").onclick = e => { if (e.target.id === "palette") closePalette(); };

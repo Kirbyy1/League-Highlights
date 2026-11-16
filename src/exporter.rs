@@ -238,7 +238,8 @@ impl Exporter {
         put("clip_window_end_wall", json!(window_end));
         put("is_match_reel", json!(false));
         put("rating", json!(""));
-        put("reviewed", json!(false));
+        // Deaths are for learning, not for the review queue.
+        put("reviewed", json!(request.event_kind == "death"));
         put("requested_duration_seconds", json!(requested));
         put("selected_buffer_seconds", json!(round3(selected_end - selected_start)));
         put("trim_start_seconds", json!(round3(trim_start)));
@@ -289,12 +290,12 @@ impl Exporter {
         fs::write(&list, text).map_err(|e| e.to_string())?;
 
         let audio = self.audio.export(start, end, work);
-        let mut inputs: Vec<(PathBuf, f64)> = Vec::new();
+        let mut inputs: Vec<(PathBuf, f64, String)> = Vec::new();
         if let Some(p) = &audio.system {
-            inputs.push((p.clone(), f64::from(s.system_audio_volume) / 100.0));
+            inputs.push((p.clone(), f64::from(s.system_audio_volume) / 100.0, String::new()));
         }
         if let Some(p) = &audio.microphone {
-            inputs.push((p.clone(), f64::from(s.microphone_volume) / 100.0));
+            inputs.push((p.clone(), f64::from(s.microphone_volume) / 100.0, mic_filter(s, start, end)));
         }
         let flags = (audio.system.is_some(), audio.microphone.is_some());
 
@@ -322,10 +323,24 @@ pub fn thumb_time(moment: f64, duration: f64) -> f64 {
     (moment - 0.5).clamp(0.0, (duration - 0.5).max(0.0))
 }
 
+/// Extra mic processing: rumble cut and noise gate, and push to talk.
+fn mic_filter(s: &crate::config::Settings, start: f64, end: f64) -> String {
+    let mut parts = Vec::new();
+    if s.mic_noise_gate {
+        // Below about -36 dB the mic is closed; speech opens it in 5 ms and
+        // it closes 300 ms after you stop, so words are never clipped.
+        parts.push("highpass=f=80,agate=threshold=0.016:ratio=8:range=0.03:attack=5:release=300".to_string());
+    }
+    if s.mic_push_to_talk && crate::ptt::active() {
+        parts.push(crate::ptt::mute_filter(&crate::ptt::intervals(start, end)));
+    }
+    parts.join(",")
+}
+
 fn mux_args(
     s: &crate::config::Settings,
     list: &Path,
-    audio: &[(PathBuf, f64)],
+    audio: &[(PathBuf, f64, String)],
     partial: &Path,
     thumb: &Path,
     thumb_at: f64,
@@ -335,7 +350,7 @@ fn mux_args(
         .map(|x| x.to_string())
         .collect();
     a.push(list.to_string_lossy().into_owned());
-    for (path, _) in audio {
+    for (path, _, _) in audio {
         a.push("-i".into());
         a.push(path.to_string_lossy().into_owned());
     }
@@ -347,7 +362,8 @@ fn mux_args(
         0 => a.push("-an".into()),
         1 => {
             let gain = audio[0].1;
-            let mut filter = format!("{common},volume={gain:.3}");
+            let extra = if audio[0].2.is_empty() { String::new() } else { format!("{},", audio[0].2) };
+            let mut filter = format!("{common},{extra}volume={gain:.3}");
             if gain > 1.0 {
                 filter.push_str(",alimiter=limit=0.98");
             }
@@ -356,8 +372,9 @@ fn mux_args(
         _ => {
             let mut parts = Vec::new();
             let mut labels = String::new();
-            for (index, (_, gain)) in audio.iter().enumerate() {
-                parts.push(format!("[{}:a]{common},volume={gain:.3}[a{}]", index + 1, index + 1));
+            for (index, (_, gain, extra)) in audio.iter().enumerate() {
+                let extra = if extra.is_empty() { String::new() } else { format!("{extra},") };
+                parts.push(format!("[{}:a]{common},{extra}volume={gain:.3}[a{}]", index + 1, index + 1));
                 labels.push_str(&format!("[a{}]", index + 1));
             }
             parts.push(format!(

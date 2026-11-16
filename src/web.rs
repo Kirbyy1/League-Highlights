@@ -262,6 +262,8 @@ fn handle(ctx: &WebCtx, mut request: Request, port: u16, token: &str) {
         (Method::Get, ["api", "devices"]) => json_response(&json!({
             "system": audio::list_devices(true),
             "microphone": audio::list_devices(false),
+            "default_microphone": audio::default_device(false),
+            "default_output": audio::default_device(true),
         })),
         (Method::Post, ["api", "settings"]) => {
             let body = read_body(&mut request);
@@ -293,6 +295,7 @@ fn handle(ctx: &WebCtx, mut request: Request, port: u16, token: &str) {
                     let _ = std::fs::create_dir_all(&clip_dir);
                     win::open_folder(&clip_dir);
                 }
+                "open-logs" => win::open_folder(&ctx.paths.root.join("logs")),
                 _ => {}
             }
             json_response(&json!({"ok": true}))
@@ -379,7 +382,7 @@ fn handle(ctx: &WebCtx, mut request: Request, port: u16, token: &str) {
                 .map(|files| files.iter().filter_map(|f| f.as_str()).filter_map(|f| library::resolve(&clip_dir, f)).collect())
                 .unwrap_or_default();
             let work = ctx.paths.root.join("export").join(format!("montage-{}", (crate::util::now() * 1000.0) as u64));
-            match ctx.ff.as_ref().ok_or_else(|| "FFmpeg is missing".to_string()).and_then(|ff| crate::media::montage(ff, &clip_dir, &paths, &work)) {
+            match ctx.ff.as_ref().ok_or_else(|| "FFmpeg is missing".to_string()).and_then(|ff| crate::media::montage(ff, &clip_dir, &paths, &work, "MONTAGE")) {
                 Ok(file) => {
                     library::CHANGES.fetch_add(1, Ordering::Relaxed);
                     json_response(&json!({ "ok": true, "file": file }))
@@ -507,6 +510,8 @@ fn clip_action(ctx: &WebCtx, clip: &Path, action: &str, body: &Value) -> Result<
                 music_volume: body["music_volume"].as_f64().unwrap_or(0.8),
                 game_volume: body["game_volume"].as_f64().unwrap_or(1.0),
                 fade: body["fade"].as_bool().unwrap_or(true),
+                speed: body["speed"].as_f64().unwrap_or(1.0),
+                encoder: None,
             };
             let file = crate::edit::render(ff, clip, &options)?;
             Ok(json!({ "ok": true, "file": file }))
@@ -516,7 +521,7 @@ fn clip_action(ctx: &WebCtx, clip: &Path, action: &str, body: &Value) -> Result<
             let start = body["start"].as_f64().unwrap_or(0.0).max(0.0);
             let end = body["end"].as_f64().ok_or("Missing end")?;
             let target = (ctx.cfg.read().unwrap().discord_target_mb * 1_000_000.0) as u64;
-            let (path, size) = crate::share::discord_copy(ff, clip, start, end, target)?;
+            let (path, size) = crate::share::discord_copy(ff, clip, start, end, target, body["caption"].as_str())?;
             let copied = win::copy_files_to_clipboard(std::slice::from_ref(&path)).is_ok();
             Ok(json!({ "ok": true, "file": path.file_name().map(|f| f.to_string_lossy().into_owned()), "size": size, "copied": copied }))
         }
@@ -528,7 +533,7 @@ fn clip_action(ctx: &WebCtx, clip: &Path, action: &str, body: &Value) -> Result<
             let ff = ctx.ff.as_ref().ok_or("FFmpeg is missing")?;
             let start = body["start"].as_f64().unwrap_or(0.0).max(0.0);
             let end = body["end"].as_f64().ok_or("Missing end")?;
-            let path = crate::media::vertical_copy(ff, clip, start, end)?;
+            let path = crate::media::vertical_copy(ff, clip, start, end, body["caption"].as_str())?;
             let copied = win::copy_files_to_clipboard(std::slice::from_ref(&path)).is_ok();
             Ok(json!({ "ok": true, "file": path.file_name().map(|f| f.to_string_lossy().into_owned()), "copied": copied }))
         }
@@ -555,7 +560,6 @@ fn status_json(ctx: &WebCtx) -> Value {
     json!({
         "status": status,
         "now": crate::util::now(),
-        "live_page": crate::lcu::LIVE_PAGE.lock().unwrap().clone(),
         "library_changes": crate::library::CHANGES.load(std::sync::atomic::Ordering::Relaxed),
         "diagnostics": diagnostics(&ctx.recorder),
         "live": { "text": live_text, "connected": live_connected, "match": current },
@@ -615,6 +619,7 @@ fn update_settings(ctx: &WebCtx, body: Value) -> Result<Value, String> {
     }
     if new.hotkey_vk != old.hotkey_vk || new.hotkey_modifiers != old.hotkey_modifiers {
         hotkey::configure(new.hotkey_vk, &new.hotkey_modifiers);
+        crate::ptt::configure(new.mic_push_to_talk, new.ptt_vk);
         log::info!("Global clip hotkey changed to {}", new.hotkey_display);
     }
     new.save(&ctx.paths.settings).map_err(|e| e.to_string())?;

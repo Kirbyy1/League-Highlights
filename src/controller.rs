@@ -68,6 +68,8 @@ pub struct Controller {
     long_clip: Option<(f64, Instant, crate::recorder::HoldGuard)>,
     /// Keeps the buffer until the long clip's export has finished.
     long_clip_saving: Option<crate::recorder::HoldGuard>,
+    /// Matches waiting for their reel until their last clip is saved.
+    pending_reels: Vec<String>,
 }
 
 /// Background jobs (thumbnails, shrinking old clips) run one at a time.
@@ -134,6 +136,7 @@ impl Controller {
             last_cleanup: None,
             long_clip: None,
             long_clip_saving: None,
+            pending_reels: Vec::new(),
         }
     }
 
@@ -219,6 +222,9 @@ impl Controller {
                         &format!("{fresh} new highlight{}", if fresh == 1 { "" } else { "s" }),
                         &format!("{}{outcome} — click to review", if ctx.champion_name.is_empty() { "Your match" } else { &ctx.champion_name }),
                     );
+                }
+                if self.cfg.read().unwrap().auto_reel && !self.pending_reels.contains(&ctx.match_id) {
+                    self.pending_reels.push(ctx.match_id.clone());
                 }
                 self.finished.insert(ctx.match_id.clone(), (ctx, result));
                 if self.finished.len() > 20 {
@@ -405,6 +411,32 @@ impl Controller {
         self.start_background_jobs();
     }
 
+    /// Match reels: the video is copied, not re-encoded, so this takes about
+    /// a second and is fine even if the next game has started.
+    fn make_reels(&mut self) {
+        let Some(ff) = self.ff.clone() else { return };
+        let dir = self.cfg.read().unwrap().clip_dir();
+        let root = self.paths.root.clone();
+        for match_id in std::mem::take(&mut self.pending_reels) {
+            let parts = crate::media::reel_parts(&dir, &match_id);
+            if parts.len() < 2 {
+                continue;
+            }
+            let (ff, dir, root) = (ff.clone(), dir.clone(), root.clone());
+            let _ = std::thread::Builder::new().name("match-reel".into()).spawn(move || {
+                let work = root.join("export").join(format!("reel-{}", (now() * 1000.0) as u64));
+                match crate::media::montage(&ff, &dir, &parts, &work, "MATCH REEL") {
+                    Ok(file) => {
+                        library::CHANGES.fetch_add(1, Ordering::Relaxed);
+                        log::info!("Match reel ready: {file}");
+                        tray::notify("Match reel ready", "Your best plays from the last game, in one video.");
+                    }
+                    Err(e) => log::warn!("Could not make the match reel: {e}"),
+                }
+            });
+        }
+    }
+
     /// Redo old thumbnails and shrink old clips (if turned on) in the
     /// background. Never while a game is running: both use the GPU or CPU,
     /// and they stop between clips as soon as a game starts.
@@ -555,6 +587,9 @@ impl Controller {
     fn poll(&mut self) {
         if self.ff.is_none() {
             return;
+        }
+        if !self.pending_reels.is_empty() && self.busy.load(Ordering::SeqCst) == 0 {
+            self.make_reels();
         }
         if self.long_clip.as_ref().is_some_and(|(_, started, _)| started.elapsed() >= LONG_CLIP_MAX) {
             log::info!("Long clip reached 5 minutes; saving it");

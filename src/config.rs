@@ -72,6 +72,12 @@ pub struct Settings {
     pub microphone_enabled: bool,
     pub microphone_device: String,
     pub microphone_volume: u32,
+    /// Cut quiet background noise (keyboard, breathing) from the mic.
+    pub mic_noise_gate: bool,
+    /// Keep the mic in clips only while a key or mouse button is held.
+    pub mic_push_to_talk: bool,
+    pub ptt_vk: u32,
+    pub ptt_display: String,
 
     pub recording_enabled: bool,
     pub recording_scope: String,
@@ -92,8 +98,6 @@ pub struct Settings {
     pub discord_target_mb: f64,
     /// Look for a newer GitHub release (notify only).
     pub check_for_updates: bool,
-    /// Show Porofessor's live page in champion select and in game.
-    pub live_stats: bool,
     /// What the clip shortcut does: "save" the last seconds, or "toggle"
     /// (first press starts a long clip, second press saves it).
     pub hotkey_mode: String,
@@ -119,6 +123,10 @@ pub struct Settings {
     pub auto_clip_other_steals: bool,
     /// The final seconds of a win.
     pub auto_clip_victory: bool,
+    /// Also save your deaths, kept apart from highlights, to learn from.
+    pub auto_clip_deaths: bool,
+    /// After each game, join its best plays into one match reel.
+    pub auto_reel: bool,
 
     pub smart_highlights_enabled: bool,
     pub smart_sensitivity: String,
@@ -149,6 +157,10 @@ impl Default for Settings {
             microphone_enabled: false,
             microphone_device: String::new(),
             microphone_volume: 100,
+            mic_noise_gate: true,
+            mic_push_to_talk: false,
+            ptt_vk: 0,
+            ptt_display: String::new(),
             recording_enabled: true,
             recording_scope: "all".into(),
             recording_skip_custom_games: false,
@@ -163,7 +175,6 @@ impl Default for Settings {
             cleanup_days: 0,
             discord_target_mb: 9.5,
             check_for_updates: true,
-            live_stats: false,
             hotkey_mode: "save".into(),
             timing_kills: 0,
             timing_objectives: 0,
@@ -180,6 +191,8 @@ impl Default for Settings {
             auto_clip_baron: true,
             auto_clip_other_steals: true,
             auto_clip_victory: true,
+            auto_clip_deaths: false,
+            auto_reel: true,
             smart_highlights_enabled: true,
             smart_sensitivity: "balanced".into(),
             hotkey_vk: 0x77,

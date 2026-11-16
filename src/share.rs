@@ -33,6 +33,25 @@ pub fn plan(duration: f64, target_bytes: u64, factor: f64) -> Plan {
     Plan { video_kbps, max_height, fps }
 }
 
+/// A caption burned into a shared copy: centred near the top in bold white on
+/// a soft dark box. The text goes through a file so no characters need
+/// escaping. Returns the filter, or None for an empty caption.
+pub fn caption_filter(caption: &str, work_dir: &Path) -> Option<String> {
+    let caption: String = caption.trim().chars().filter(|c| !c.is_control()).take(80).collect();
+    if caption.is_empty() {
+        return None;
+    }
+    let file = work_dir.join(format!("caption-{}.txt", std::process::id()));
+    fs::write(&file, caption).ok()?;
+    let esc = |p: &Path| p.to_string_lossy().replace('\\', "/").replace(':', "\\:").replace('\'', "\\'");
+    let font = Path::new(&std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into())).join("Fonts").join("segoeuib.ttf");
+    let font = if font.is_file() { format!("fontfile='{}':", esc(&font)) } else { String::new() };
+    Some(format!(
+        "drawtext={font}textfile='{}':fontcolor=white:fontsize=h/18:x=(w-text_w)/2:y=h*0.08:box=1:boxcolor=black@0.5:boxborderw=h/60",
+        esc(&file)
+    ))
+}
+
 pub fn encoder_args(encoder: &str, kbps: u32) -> Vec<String> {
     let (b, max, buf) = (format!("{kbps}k"), format!("{}k", kbps * 13 / 10), format!("{}k", kbps * 2));
     let list: Vec<&str> = match encoder {
@@ -48,7 +67,7 @@ pub fn encoder_args(encoder: &str, kbps: u32) -> Vec<String> {
 }
 
 /// Encode `source[start..end]` to fit `target_bytes`. Returns (path, size).
-pub fn discord_copy(ff: &Ffmpeg, source: &Path, start: f64, end: f64, target_bytes: u64) -> Result<(PathBuf, u64), String> {
+pub fn discord_copy(ff: &Ffmpeg, source: &Path, start: f64, end: f64, target_bytes: u64, caption: Option<&str>) -> Result<(PathBuf, u64), String> {
     let duration = (end - start).max(0.0);
     if duration < 1.0 {
         return Err("Select at least one second to export.".into());
@@ -63,6 +82,7 @@ pub fn discord_copy(ff: &Ffmpeg, source: &Path, start: f64, end: f64, target_byt
         n += 1;
     }
     let encoder = ff.choose_encoder()?;
+    let text = caption.and_then(|c| caption_filter(c, &dir)).map(|f| format!(",{f}")).unwrap_or_default();
     for factor in [1.0, 0.85, 0.7] {
         let p = plan(duration, target_bytes, factor);
         let mut args: Vec<String> = vec![
@@ -70,7 +90,7 @@ pub fn discord_copy(ff: &Ffmpeg, source: &Path, start: f64, end: f64, target_byt
             "-ss".into(), format!("{start:.3}"), "-i".into(), source.to_string_lossy().into_owned(),
             "-t".into(), format!("{duration:.3}"),
             "-map".into(), "0:v:0".into(), "-map".into(), "0:a?".into(),
-            "-vf".into(), format!("scale=-2:'min({},ih)':flags=bicubic,fps={},format=yuv420p", p.max_height, p.fps),
+            "-vf".into(), format!("scale=-2:'min({},ih)':flags=bicubic,fps={}{text},format=yuv420p", p.max_height, p.fps),
         ];
         args.extend(encoder_args(encoder, p.video_kbps));
         args.extend(
@@ -87,13 +107,20 @@ pub fn discord_copy(ff: &Ffmpeg, source: &Path, start: f64, end: f64, target_byt
         let size = fs::metadata(&partial).map_or(0, |m| m.len());
         if size > 0 && size <= target_bytes {
             fs::rename(&partial, &output).map_err(|e| e.to_string())?;
+            remove_captions(&dir);
             log::info!("Discord copy {} ({size} bytes, {} kbps, {}p{})", output.display(), p.video_kbps, p.max_height, p.fps);
             return Ok((output, size));
         }
         log::info!("Discord copy was {size} bytes (limit {target_bytes}); retrying smaller");
         let _ = fs::remove_file(&partial);
     }
+    remove_captions(&dir);
     Err("Could not fit the clip under the upload limit. Trim it shorter and try again.".into())
+}
+
+/// Caption text files are only needed while FFmpeg runs.
+pub fn remove_captions(dir: &Path) {
+    let _ = fs::remove_file(dir.join(format!("caption-{}.txt", std::process::id())));
 }
 
 #[cfg(test)]
@@ -107,6 +134,12 @@ mod tests {
         let long = plan(45.0, 9_500_000, 1.0);
         assert_eq!((long.max_height, long.fps), (720, 30));
         let tiny = plan(120.0, 9_500_000, 1.0);
+        let dir = std::env::temp_dir();
+        assert!(caption_filter("   ", &dir).is_none());
+        let f = caption_filter("Pentakill!", &dir).unwrap();
+        assert!(f.starts_with("drawtext=") && f.contains("textfile='") && f.contains(":fontsize=h/18"));
+        assert!(!f.contains("C:/"), "drive colons are escaped: {f}");
+        remove_captions(&dir);
         assert_eq!(tiny.max_height, 540);
         // Budget check: video + audio stays under the target.
         let p = plan(30.0, 9_500_000, 1.0);

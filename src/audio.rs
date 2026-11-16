@@ -19,7 +19,7 @@ use std::time::Duration;
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 
 use windows::Win32::Media::Audio::{
-    eCapture, eConsole, eRender, EDataFlow, IAudioCaptureClient, IAudioClient, IMMDevice,
+    eCapture, eCommunications, eConsole, eRender, EDataFlow, IAudioCaptureClient, IAudioClient, IMMDevice,
     IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT,
     AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
     AUDCLNT_STREAMFLAGS_LOOPBACK,
@@ -497,12 +497,15 @@ unsafe fn open_stream(kind: Kind, preferred: &str) -> Result<Stream, String> {
     let flow = if kind == Kind::System { eRender } else { eCapture };
     let device = match find_device(&enumerator, flow, preferred) {
         Some(device) => device,
-        None => enumerator
-            .GetDefaultAudioEndpoint(flow, eConsole)
-            .map_err(|_| match kind {
+        None => {
+            if !preferred.trim().is_empty() {
+                log::info!("{} '{preferred}' is not connected; using the Windows default", capitalise(kind.label()));
+            }
+            default_endpoint(&enumerator, kind).ok_or_else(|| match kind {
                 Kind::System => "No audio output device was found.".to_string(),
                 Kind::Microphone => "No microphone input device was found.".to_string(),
-            })?,
+            })?
+        }
     };
     let name = friendly_name(&device);
     let loopback = if kind == Kind::System { AUDCLNT_STREAMFLAGS_LOOPBACK } else { 0 };
@@ -580,6 +583,30 @@ unsafe fn parse_format(pointer: *const WAVEFORMATEX) -> Format {
         channels: usize::from(base.nChannels),
         bits: base.wBitsPerSample,
         float,
+    }
+}
+
+/// Automatic device choice. For the mic: the default communications device
+/// (the headset Discord and the game's voice chat use), then the general
+/// default. For system audio: the default output.
+unsafe fn default_endpoint(enumerator: &IMMDeviceEnumerator, kind: Kind) -> Option<IMMDevice> {
+    if kind == Kind::Microphone {
+        enumerator
+            .GetDefaultAudioEndpoint(eCapture, eCommunications)
+            .or_else(|_| enumerator.GetDefaultAudioEndpoint(eCapture, eConsole))
+            .ok()
+    } else {
+        enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok()
+    }
+}
+
+/// Name of the device "Automatic" would use right now, if any.
+pub fn default_device(system: bool) -> Option<String> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let enumerator = enumerator().ok()?;
+        let kind = if system { Kind::System } else { Kind::Microphone };
+        default_endpoint(&enumerator, kind).map(|d| friendly_name(&d))
     }
 }
 

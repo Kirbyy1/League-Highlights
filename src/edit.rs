@@ -1,6 +1,7 @@
-//! Clip editor export: trim range + optional background music, written as a
-//! new clip next to the original. Video is stream-copied (no quality loss);
-//! only the audio is re-encoded to mix the music in.
+//! Clip editor export: trim range + optional background music and slow
+//! motion, written as a new clip next to the original. Without slow motion the
+//! video is stream-copied (no quality loss) and only the audio is re-encoded;
+//! slow motion re-encodes the video with the hardware encoder.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,24 +26,53 @@ pub struct EditOptions {
     /// 0.0 - 2.0 (game audio under the music)
     pub game_volume: f64,
     pub fade: bool,
+    /// Playback speed: 1.0 normal, 0.5 or 0.25 slow motion.
+    pub speed: f64,
+    /// Video encoder for slow motion (from Ffmpeg::choose_encoder).
+    pub encoder: Option<&'static str>,
+}
+
+/// Speeds the editor offers.
+pub fn clamp_speed(speed: f64) -> f64 {
+    if speed <= 0.3 {
+        0.25
+    } else if speed < 0.9 {
+        0.5
+    } else {
+        1.0
+    }
+}
+
+/// atempo only goes down to 0.5, so 0.25 is two steps.
+fn atempo(speed: f64) -> String {
+    if speed <= 0.3 { ",atempo=0.5,atempo=0.5".into() } else if speed < 0.9 { format!(",atempo={speed}") } else { String::new() }
 }
 
 /// FFmpeg arguments for the edit. Separate from the run so it can be tested.
 pub fn build_args(source: &Path, output: &Path, o: &EditOptions, clip_has_audio: bool) -> Vec<String> {
-    let duration = (o.end - o.start).max(0.5);
+    let input_duration = (o.end - o.start).max(0.5);
+    let speed = clamp_speed(o.speed);
+    // The result is longer when slowed down.
+    let duration = input_duration / speed;
     let mut args: Vec<String> = vec![
         "-hide_banner".into(), "-loglevel".into(), "error".into(), "-y".into(),
-        "-ss".into(), format!("{:.3}", o.start), "-t".into(), format!("{duration:.3}"),
+        "-ss".into(), format!("{:.3}", o.start), "-t".into(), format!("{input_duration:.3}"),
         "-i".into(), source.to_string_lossy().into_owned(),
     ];
     if let Some(music) = &o.music {
         // Loop short songs so the music never stops before the clip does.
         args.extend(["-stream_loop".into(), "-1".into(), "-ss".into(), format!("{:.3}", o.music_offset.max(0.0)), "-i".into(), music.to_string_lossy().into_owned()]);
     }
-    args.extend(["-map".into(), "0:v:0".into(), "-c:v".into(), "copy".into()]);
+    args.extend(["-map".into(), "0:v:0".into()]);
+    if speed < 1.0 {
+        args.extend(["-vf".into(), format!("setpts=PTS/{speed}")]);
+        args.extend(crate::share::encoder_args(o.encoder.unwrap_or("libx264"), 14000));
+    } else {
+        args.extend(["-c:v".into(), "copy".into()]);
+    }
 
     let stereo = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo";
-    let game = format!("[0:a]{stereo},volume={:.3}", o.game_volume.clamp(0.0, 2.0));
+    let game = format!("[0:a]{stereo}{},volume={:.3}", atempo(speed), o.game_volume.clamp(0.0, 2.0));
     let mut music = format!("[1:a]{stereo},volume={:.3}", o.music_volume.clamp(0.0, 2.0));
     if o.fade {
         let fade_in = 1.0_f64.min(duration / 4.0);
@@ -85,7 +115,9 @@ pub fn render(ff: &Ffmpeg, source: &Path, o: &EditOptions) -> Result<String, Str
     if end - start < 1.0 {
         return Err("Select at least one second to export.".into());
     }
-    let o = EditOptions { start, end, music: o.music.clone(), ..*o };
+    let speed = clamp_speed(o.speed);
+    let encoder = if speed < 1.0 { Some(ff.choose_encoder()?) } else { None };
+    let o = EditOptions { start, end, music: o.music.clone(), speed, encoder, ..*o };
     let stem = source.file_stem().unwrap_or_default().to_string_lossy().into_owned();
     let mut output = source.with_file_name(format!("{stem}_edit.mp4"));
     let mut n = 2;
@@ -105,7 +137,7 @@ pub fn render(ff: &Ffmpeg, source: &Path, o: &EditOptions) -> Result<String, Str
         return Err("Export produced an empty file.".into());
     }
     fs::rename(&partial, &output).map_err(|e| e.to_string())?;
-    let duration = ff.probe_duration(&output).unwrap_or(end - start);
+    let duration = ff.probe_duration(&output).unwrap_or((end - start) / speed);
 
     // Metadata: same match and labels, events shifted into the new timeline.
     let events: Vec<StoredEvent> = meta
@@ -116,12 +148,12 @@ pub fn render(ff: &Ffmpeg, source: &Path, o: &EditOptions) -> Result<String, Str
     let shifted: Vec<StoredEvent> = events
         .into_iter()
         .filter(|e| e.relative_time >= start && e.relative_time <= end)
-        .map(|e| StoredEvent { relative_time: e.relative_time - start, ..e })
+        .map(|e| StoredEvent { relative_time: (e.relative_time - start) / speed, ..e })
         .collect();
     let trigger = meta
         .get("trigger_relative_seconds")
         .and_then(Value::as_f64)
-        .map_or(duration, |t| t - start)
+        .map_or(duration, |t| (t - start) / speed)
         .clamp(0.0, duration);
     let manual = meta.get("event_kind").and_then(Value::as_str).unwrap_or("manual") == "manual";
     let suggestion = suggest_trim(duration, &shifted, Some(trigger), manual);
@@ -137,6 +169,7 @@ pub fn render(ff: &Ffmpeg, source: &Path, o: &EditOptions) -> Result<String, Str
         ("edited_from", json!(source.file_name().unwrap().to_string_lossy())),
         ("edited", json!(true)),
         ("music_track", json!(music_name)),
+        ("slow_motion", json!(if speed < 1.0 { Some(speed) } else { None })),
         ("events", Value::Array(shifted.iter().map(StoredEvent::to_json).collect())),
         ("trigger_relative_seconds", json!(round3(trigger))),
         ("suggested_trim_start", json!(round3(suggestion.start))),
@@ -171,6 +204,8 @@ mod tests {
             music_volume: 0.8,
             game_volume: 0.5,
             fade: true,
+            speed: 1.0,
+            encoder: None,
         }
     }
 
@@ -181,6 +216,19 @@ mod tests {
         assert!(args.contains("[g][m]amix=inputs=2:duration=first"));
         assert!(args.contains("afade=t=out:st=8.500:d=1.50"));
         assert!(args.contains("-c:v copy"));
+    }
+
+    #[test]
+    fn slow_motion_stretches_video_and_sound() {
+        let mut o = opts(true);
+        o.speed = 0.25;
+        o.encoder = Some("h264_nvenc");
+        let args = build_args(Path::new("in.mp4"), Path::new("out.mp4"), &o, true).join(" ");
+        assert!(args.contains("-t 10.000 -i in.mp4"), "reads 10 s of the clip");
+        assert!(args.contains("setpts=PTS/0.25") && args.contains("h264_nvenc") && !args.contains("-c:v copy"));
+        assert!(args.contains("atempo=0.5,atempo=0.5"));
+        assert!(args.contains("-t 40.000 -movflags"), "writes 40 s");
+        assert_eq!((clamp_speed(0.5), clamp_speed(0.1), clamp_speed(2.0)), (0.5, 0.25, 1.0));
     }
 
     #[test]

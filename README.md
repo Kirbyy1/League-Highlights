@@ -23,27 +23,34 @@ Python runtime and no Qt. **[Download the latest release](https://github.com/Kir
 ## Features
 
 - **Lightweight recording**: FFmpeg Desktop Duplication with NVENC, Quick Sync
-  or AMF (zero-copy on NVIDIA at native resolution), WASAPI system and
-  microphone audio, and low-priority capture with a disk-space guard.
+  or AMF (zero-copy on NVIDIA at native resolution), WASAPI system audio and an
+  automatically chosen microphone with a noise gate and optional push to talk,
+  and low-priority capture with a disk-space guard.
 - **Smart Highlights V2**: fight grouping, adaptive pre/post-roll, duplicate
   suppression and explainable scores. It also keeps shutdowns, first blood,
   epic-monster steals and the winning moment, limits routine clips per match,
-  and learns from your ratings.
+  and learns from your ratings. Clip length per kind of play is adjustable.
+- **Match reels**: after each game, its three best plays are joined into one
+  video. Optionally your deaths are saved too, apart from highlights, to learn
+  from.
+- **Long clips**: the shortcut can start and stop a clip of up to 5 minutes.
 - **In-game toast**: a small click-through notice over the game when a clip
   is saved (or fails).
-- **Post-match review**: when a game ends, step through its new clips and keep,
-  rate or delete each with one key.
-- **Library**: match-grouped highlights with champion art, a custom player
-  with event markers, lossless trim and Smart Trim, and multi-select.
-- **Editor**: trim a clip, add background music from your own files, balance
-  game and music volume with fades, and save a new clip without re-encoding
-  the video.
-- **Sharing**: copy a clip to the clipboard (paste into Discord), or make a
-  Discord-ready copy that fits your upload limit.
-- **Storage**: usage and free space at a glance, plus optional automatic
-  clean-up (clips rated Good are never removed).
-- **Live game stats** (optional): shows your game's Porofessor page inside the
-  app from champion select until the game ends, using your server and Riot ID.
+- **Library**: one row per match with its result, KDA and best clips; champion
+  and Starred filters; a match page with the player, event icons on the
+  timeline, lossless trim and Smart Trim; and a weekly recap.
+- **Post-match review**: step through new clips and keep, rate or delete each
+  with one key. Watching a clip also marks it reviewed.
+- **Editor**: trim, slow motion, background music from your own files with
+  volume and fades, and montages of a match's clips.
+- **Sharing**: copy a clip to the clipboard (paste into Discord), a
+  Discord-ready copy that fits your upload limit, or a vertical 9:16 copy for
+  TikTok and Shorts that follows your champion. Both copies can carry a caption.
+- **Storage**: usage and free space in Settings, optional clean-up, and
+  optional shrinking of old clips to about half the size. Starred and Good
+  clips are never removed or shrunk.
+- **Updates**: Update now downloads the new installer from GitHub, checks it
+  against the release checksums, installs and restarts.
 - **Setup check**: verifies FFmpeg, encoder, capture, League's window mode,
   audio, clip folder and disk space, with one-click fixes.
 
@@ -112,11 +119,9 @@ Gameplay never leaves the PC. The app contacts only:
 - Riot's local Live Client and League Client APIs on `127.0.0.1` during games;
 - Riot's Data Dragon CDN for champion icons and splash art, once per champion
   (Settings → App → Champion art);
-- GitHub's releases API every few hours to show an update link
-  (Settings → App → Check for updates);
-- porofessor.gg, only if you turn on Settings → App → Live game stats: the app
-  then opens your live game page there, which includes your Riot ID and server.
-  Off by default.
+- GitHub's releases API every few hours, and GitHub's downloads when you choose
+  Update now (Settings → App → Check for updates);
+- the League Client's match history on `127.0.0.1`, to fill in Win or Loss.
 
 ## Files
 

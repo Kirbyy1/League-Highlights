@@ -33,15 +33,137 @@ fn s(v: &str) -> String {
     v.to_string()
 }
 
-/// The vertical crop: a 9:16 window from the middle of the frame, where the
-/// champion is with a locked camera, scaled to 1080x1920.
-pub fn vertical_filter() -> String {
+/// The vertical crop: a 9:16 window, scaled to 1080x1920. `x` is an FFmpeg
+/// expression for the window's centre as a fraction of the width (0.5 =
+/// middle); it may change over time to follow the champion.
+pub fn vertical_filter_at(x: &str) -> String {
     // Even crop width (1080p gives 606, not 607.5) and square pixels.
-    s("crop=trunc(ih*9/32)*2:ih:(iw-trunc(ih*9/32)*2)/2:0,scale=1080:1920:flags=bicubic,setsar=1,format=yuv420p")
+    format!(
+        "crop=w=trunc(ih*9/32)*2:h=ih:x='clip(({x})*in_w-out_w/2,0,in_w-out_w)':y=0,scale=1080:1920:flags=bicubic,setsar=1,format=yuv420p"
+    )
+}
+
+#[cfg(test)]
+pub fn vertical_filter() -> String {
+    vertical_filter_at("0.5")
+}
+
+// ---- following the champion ----
+// Your own health bar is the only yellow bar in League (allies are blue,
+// enemies red), so the champion is found by looking for it in small frames.
+
+const TRACK_W: usize = 480;
+const TRACK_H: usize = 270;
+const TRACK_FPS: f64 = 2.0;
+
+fn bar_pixel(r: u8, g: u8, b: u8) -> bool {
+    r > 190 && g > 150 && b < 110 && r >= g && r.saturating_sub(b) > 110
+}
+
+/// Centre of the longest yellow bar in a frame, as a fraction of the width.
+/// The top strip (scoreboard), the HUD at the bottom and the minimap column
+/// are ignored.
+pub fn find_bar(frame: &[u8]) -> Option<f64> {
+    let mut best: Option<(usize, f64)> = None;
+    for y in TRACK_H * 6 / 100..TRACK_H * 80 / 100 {
+        let row = &frame[y * TRACK_W * 3..(y + 1) * TRACK_W * 3];
+        let mut run = 0usize;
+        for x in 0..=TRACK_W {
+            let hit = x < TRACK_W && bar_pixel(row[x * 3], row[x * 3 + 1], row[x * 3 + 2]);
+            if hit {
+                run += 1;
+                continue;
+            }
+            if run >= 8 {
+                let start = x - run;
+                let in_minimap_column = start * 100 > TRACK_W * 82 && y * 10 > TRACK_H * 6;
+                if !in_minimap_column && best.is_none_or(|(len, _)| run > len) {
+                    best = Some((run, (start as f64 + run as f64 / 2.0) / TRACK_W as f64));
+                }
+            }
+            run = 0;
+        }
+    }
+    best.map(|(_, x)| x)
+}
+
+/// Clean the per-frame positions: a rolling median drops stray yellow things
+/// (gold, items), gaps (death, fog) keep the last position, and a short
+/// average turns jumps into pans. None when the bar was rarely found.
+pub fn smooth_track(raw: &[Option<f64>]) -> Option<Vec<f64>> {
+    let found = raw.iter().filter(|x| x.is_some()).count();
+    if raw.is_empty() || found * 10 < raw.len() * 4 {
+        return None;
+    }
+    let median: Vec<Option<f64>> = (0..raw.len())
+        .map(|i| {
+            let mut w: Vec<f64> = raw[i.saturating_sub(3)..(i + 4).min(raw.len())].iter().flatten().copied().collect();
+            if w.is_empty() {
+                return None;
+            }
+            w.sort_by(f64::total_cmp);
+            Some(w[w.len() / 2])
+        })
+        .collect();
+    let first = median.iter().flatten().next().copied()?;
+    let mut filled = Vec::with_capacity(raw.len());
+    let mut last = first;
+    for m in &median {
+        if let Some(v) = m {
+            last = *v;
+        }
+        filled.push(last);
+    }
+    Some(
+        (0..filled.len())
+            .map(|i| {
+                let w = &filled[i.saturating_sub(2)..(i + 3).min(filled.len())];
+                w.iter().sum::<f64>() / w.len() as f64
+            })
+            .collect(),
+    )
+}
+
+/// A piecewise-linear FFmpeg expression in `t` through the positions, one
+/// per second at most (fewer for long clips, so the expression stays short).
+pub fn path_expression(points: &[f64], fps: f64) -> String {
+    if points.is_empty() {
+        return "0.5".into();
+    }
+    let step = ((points.len() as f64 / 90.0).ceil() as usize).max(fps as usize).max(1);
+    let keys: Vec<(f64, f64)> = points.iter().enumerate().step_by(step).map(|(i, x)| (i as f64 / fps, *x)).collect();
+    let mut expr = format!("{:.4}", keys.last().unwrap().1);
+    for pair in keys.windows(2).rev() {
+        let ((t0, x0), (t1, x1)) = (pair[0], pair[1]);
+        expr = format!("if(lt(t,{t1:.2}),{x0:.4}+({:.4})*(t-{t0:.2})/{:.2},{expr})", x1 - x0, t1 - t0);
+    }
+    expr
+}
+
+/// Where the champion is over `clip[start..end]`, as a crop expression.
+fn follow_champion(ff: &Ffmpeg, clip: &Path, start: f64, end: f64, work: &Path) -> Option<String> {
+    fs::create_dir_all(work).ok()?;
+    let raw = work.join(format!("track-{}.rgb", std::process::id()));
+    let args = vec![
+        s("-hide_banner"), s("-loglevel"), s("error"), s("-y"), s("-ss"), format!("{start:.3}"), s("-t"), format!("{:.3}", end - start),
+        s("-i"), clip.to_string_lossy().into_owned(),
+        s("-vf"), format!("fps={TRACK_FPS},scale={TRACK_W}:{TRACK_H}"), s("-f"), s("rawvideo"), s("-pix_fmt"), s("rgb24"),
+        raw.to_string_lossy().into_owned(),
+    ];
+    let ran = ff.run(&args, Duration::from_secs(120));
+    let data = fs::read(&raw).unwrap_or_default();
+    let _ = fs::remove_file(&raw);
+    ran.ok()?;
+    let frame = TRACK_W * TRACK_H * 3;
+    let positions: Vec<Option<f64>> = data.chunks_exact(frame).map(find_bar).collect();
+    let found = positions.iter().flatten().count();
+    let path = smooth_track(&positions);
+    log::info!("Vertical crop: found your champion in {found} of {} frames{}", positions.len(), if path.is_some() { "" } else { "; using the centre" });
+    path.map(|p| path_expression(&p, TRACK_FPS))
 }
 
 /// A 9:16 copy of `clip[start..end]` in `<clip folder>\Shared`.
-pub fn vertical_copy(ff: &Ffmpeg, clip: &Path, start: f64, end: f64) -> Result<PathBuf, String> {
+pub fn vertical_copy(ff: &Ffmpeg, clip: &Path, start: f64, end: f64, caption: Option<&str>) -> Result<PathBuf, String> {
     let duration = (end - start).max(0.0);
     if duration < 1.0 {
         return Err("Select at least one second to export.".into());
@@ -55,12 +177,21 @@ pub fn vertical_copy(ff: &Ffmpeg, clip: &Path, start: f64, end: f64) -> Result<P
     let mut args = vec![
         s("-hide_banner"), s("-loglevel"), s("error"), s("-y"),
         s("-ss"), format!("{start:.3}"), s("-i"), clip.to_string_lossy().into_owned(), s("-t"), format!("{duration:.3}"),
-        s("-map"), s("0:v:0"), s("-map"), s("0:a?"), s("-vf"), vertical_filter(),
+        s("-map"), s("0:v:0"), s("-map"), s("0:a?"),
+        s("-vf"), {
+            let x = follow_champion(ff, clip, start, end, &dir).unwrap_or_else(|| s("0.5"));
+            match caption.and_then(|c| crate::share::caption_filter(c, &dir)) {
+                Some(text) => format!("{},{text}", vertical_filter_at(&x)),
+                None => vertical_filter_at(&x),
+            }
+        },
     ];
     args.extend(crate::share::encoder_args(encoder, VERTICAL_KBPS));
     args.extend(["-c:a", "aac", "-b:a", "160k", "-ac", "2", "-movflags", "+faststart", "-f", "mp4"].map(s));
     args.push(partial.to_string_lossy().into_owned());
-    if let Err(e) = ff.run(&args, Duration::from_secs(300)) {
+    let result = ff.run(&args, Duration::from_secs(300));
+    crate::share::remove_captions(&dir);
+    if let Err(e) = result {
         let _ = fs::remove_file(&partial);
         return Err(format!("Vertical export failed: {}", last_line(&e)));
     }
@@ -75,7 +206,7 @@ fn concat_escape(path: &Path) -> String {
 
 /// Join clips (in the given order) into one new clip in the library.
 /// The video is copied, not re-encoded; returns the new file name.
-pub fn montage(ff: &Ffmpeg, dir: &Path, clips: &[PathBuf], work: &Path) -> Result<String, String> {
+pub fn montage(ff: &Ffmpeg, dir: &Path, clips: &[PathBuf], work: &Path, label: &str) -> Result<String, String> {
     if clips.len() < 2 {
         return Err("Pick at least two clips for a montage.".into());
     }
@@ -89,7 +220,8 @@ pub fn montage(ff: &Ffmpeg, dir: &Path, clips: &[PathBuf], work: &Path) -> Resul
     let first = &metas[0];
     let champion = first.get("champion_name").and_then(Value::as_str).unwrap_or("").to_string();
     let stamp = local_time(now());
-    let prefix = if champion.is_empty() { s("MONTAGE") } else { format!("{}_MONTAGE", champion.replace(' ', "_")) };
+    let tag = label.replace(' ', "_");
+    let prefix = if champion.is_empty() { tag } else { format!("{}_{tag}", champion.replace(' ', "_")) };
     let output = unique(dir, &format!("{prefix}_{}", stamp.file_stamp()), "mp4");
     let partial = output.with_extension("mp4.part");
     let mut args = vec![
@@ -121,7 +253,7 @@ pub fn montage(ff: &Ffmpeg, dir: &Path, clips: &[PathBuf], work: &Path) -> Resul
             meta.insert(key.into(), v.clone());
         }
     }
-    meta.insert("label".into(), json!("MONTAGE"));
+    meta.insert("label".into(), json!(label));
     meta.insert("created_at".into(), json!(stamp.iso()));
     meta.insert("duration_seconds".into(), json!((duration * 1000.0).round() / 1000.0));
     meta.insert("size_bytes".into(), json!(size));
@@ -245,14 +377,61 @@ pub fn shrink_old(ff: &Ffmpeg, dir: &Path, days: u32, height: u32, keep_going: &
     (count, saved)
 }
 
+/// The clips a match reel is made from: the match's best plays (up to three,
+/// by score), in the order they happened. Deaths and montages are left out.
+pub fn reel_parts(dir: &Path, match_id: &str) -> Vec<PathBuf> {
+    let mut clips: Vec<Value> = library::scan(dir)
+        .into_iter()
+        .filter(|c| c["match_id"].as_str() == Some(match_id))
+        .filter(|c| !matches!(c["event_kind"].as_str(), Some("death") | Some("montage")))
+        .collect();
+    if clips.iter().any(|c| c["label"].as_str() == Some("MATCH REEL")) {
+        return Vec::new();
+    }
+    clips.sort_by_key(|c| std::cmp::Reverse(c["highlight_score"].as_i64().unwrap_or(0)));
+    clips.truncate(3);
+    clips.sort_by(|a, b| a["created_at"].as_str().cmp(&b["created_at"].as_str()));
+    clips.iter().filter_map(|c| c["file"].as_str().and_then(|f| library::resolve(dir, f))).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn vertical_crop_keeps_the_middle() {
-        assert!(vertical_filter().starts_with("crop=trunc(ih*9/32)*2:ih:(iw-trunc(ih*9/32)*2)/2:0,scale=1080:1920"));
-        assert!(vertical_filter().contains("setsar=1"));
+        assert!(vertical_filter().starts_with("crop=w=trunc(ih*9/32)*2:h=ih:x='clip((0.5)*in_w-out_w/2,0,in_w-out_w)'"));
+        assert!(vertical_filter().contains("scale=1080:1920") && vertical_filter().contains("setsar=1"));
+    }
+
+    fn frame_with_bar(x0: usize, len: usize, y: usize) -> Vec<u8> {
+        let mut f = vec![30u8; TRACK_W * TRACK_H * 3];
+        for x in x0..x0 + len {
+            let i = (y * TRACK_W + x) * 3;
+            f[i..i + 3].copy_from_slice(&[235, 200, 40]);
+        }
+        f
+    }
+
+    #[test]
+    fn finds_the_yellow_bar() {
+        let x = find_bar(&frame_with_bar(200, 20, 90)).unwrap();
+        assert!((x - 210.0 / 480.0).abs() < 1e-9);
+        assert!(find_bar(&frame_with_bar(200, 5, 90)).is_none(), "too short to be a bar");
+        assert!(find_bar(&frame_with_bar(420, 20, 200)).is_none(), "minimap column");
+        assert!(find_bar(&frame_with_bar(200, 20, 250)).is_none(), "bottom HUD");
+    }
+
+    #[test]
+    fn track_drops_strays_and_fills_gaps() {
+        let mut raw = vec![Some(0.45); 12];
+        raw[5] = Some(0.1); // a gold icon
+        raw[8] = None; // dead for a moment
+        let p = smooth_track(&raw).unwrap();
+        assert!(p.iter().all(|x| (x - 0.45).abs() < 1e-9), "{p:?}");
+        assert!(smooth_track(&[None, None, Some(0.3), None, None]).is_none(), "rarely found");
+        let e = path_expression(&[0.4, 0.4, 0.6, 0.6], 2.0);
+        assert_eq!(e, "if(lt(t,1.00),0.4000+(0.2000)*(t-0.00)/1.00,0.6000)");
     }
 
     #[test]

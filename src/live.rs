@@ -586,10 +586,13 @@ impl Detector {
         }
         self.track(&name, event);
         let victim_streak = if name == "championkill" { self.update_streaks(event) } else { 0 };
-        let (smart, dragon_on, baron_on, other_on, victory_on) = {
+        let (smart, dragon_on, baron_on, other_on, victory_on, deaths_on) = {
             let c = self.cfg.read().unwrap();
-            (c.smart_highlights_enabled, c.auto_clip_dragon, c.auto_clip_baron, c.auto_clip_other_steals, c.auto_clip_victory)
+            (c.smart_highlights_enabled, c.auto_clip_dragon, c.auto_clip_baron, c.auto_clip_other_steals, c.auto_clip_victory, c.auto_clip_deaths)
         };
+        if deaths_on && name == "championkill" && self.is_active(field(event, "VictimName")) {
+            self.emit_death(event);
+        }
         if !smart && (matches!(name.as_str(), "championkill" | "multikill" | "ace" | "firstblood") || name.ends_with("kill")) {
             if name == "championkill" || name == "multikill" {
                 self.clear_kills();
@@ -1049,6 +1052,29 @@ impl Detector {
 
     /// When you win: the final seconds before the Nexus falls, unless the
     /// last automatic clip already covers them.
+    /// Your own death, for "learn from my deaths". Saved apart from
+    /// highlights: it never counts toward the per-match clip budget.
+    fn emit_death(&mut self, event: &Value) {
+        let wall = now();
+        let killer = self.identity_for(field(event, "KillerName"));
+        let killer_text = if killer.champion_name.is_empty() { String::new() } else { format!("killed by {}", killer.champion_name) };
+        let request = HighlightRequest {
+            label: "DEATH".into(),
+            event_started_at: Some(wall - 1.0),
+            event_ended_at: Some(wall),
+            pre_seconds: 14.0,
+            post_seconds: 3.0,
+            event_game_time: Some(event_time(event)),
+            event_kind: "death".into(),
+            automatic: true,
+            highlight_score: 0,
+            score_reasons: if killer_text.is_empty() { vec!["your death".into()] } else { vec![killer_text] },
+            ..self.request_base()
+        };
+        log::info!("Saving a death clip");
+        let _ = self.tx.send(Cmd::Highlight(request));
+    }
+
     fn emit_victory(&mut self, event: &Value) {
         let wall = now();
         if wall - self.last_auto_end < 15.0 {
