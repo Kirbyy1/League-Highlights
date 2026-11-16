@@ -24,6 +24,7 @@
   --bad: #e84057;
   --warn: #e0a83a;
   --track: #3a3a40;
+  --seg: #1b1b1e;
   --shadow: 0 16px 48px rgba(0, 0, 0, .5);
   --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
@@ -34,7 +35,7 @@
   :root {
     --bg: #fafaf8; --side: #f1f0ec; --raise: #ffffff; --hover: #e9e8e3; --active: #e1e0da; --line: #e3e2dc;
     --text: #1c1c1e; --muted: #67665f; --faint: #9a9990; --accent: #1f8f4d; --accent-2: #6f9a1c; --accent-text: #fff;
-    --good: #1f8f4d; --win: #1f7fd1; --bad: #c62f45; --warn: #a87a1c; --track: #d5d4cc;
+    --good: #1f8f4d; --win: #1f7fd1; --bad: #c62f45; --warn: #a87a1c; --track: #d5d4cc; --seg: #e8e7e2;
     --shadow: 0 16px 48px rgba(40, 35, 20, .18);
     color-scheme: light;
   }
@@ -55,8 +56,8 @@ button, input, select { font: inherit; color: inherit; }
 button { background: none; border: none; border-radius: 8px; padding: 6px 10px; cursor: pointer; color: var(--muted); transition: background .12s, color .12s, opacity .12s; display: inline-flex; align-items: center; gap: 7px; }
 button:hover { background: var(--hover); color: var(--text); }
 button.on { color: var(--text); background: var(--active); }
-button.primary { background: linear-gradient(100deg, var(--accent-2), var(--accent) 70%); color: var(--accent-text); font-weight: 600; }
-button.primary:hover { filter: brightness(1.08); background: linear-gradient(100deg, var(--accent-2), var(--accent) 70%); color: var(--accent-text); }
+button.primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+button.primary:hover { filter: brightness(1.08); background: var(--accent); color: var(--accent-text); }
 button:disabled { opacity: .35; cursor: default; pointer-events: none; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 input[type=text], select { background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
@@ -92,7 +93,7 @@ body.collapsed #side { margin-left: -276px; }
 .find input { border: none; flex: 1; min-width: 0; padding: 7px 0; outline: none; color: var(--text); }
 .pills { display: flex; gap: 2px; padding: 6px 10px 2px; }
 .pills button { font-size: 12px; padding: 2px 10px; border-radius: 99px; }
-#matchList { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+#side .spacer { flex: 1; }
 .group { font-size: 11.5px; color: var(--faint); padding: 14px 10px 5px; font-weight: 500; }
 .match { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 9px; cursor: pointer; }
 .match:hover { background: var(--hover); }
@@ -125,7 +126,20 @@ body.collapsed #side { margin-left: -276px; }
 
 /* ---------- main + title bar ---------- */
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
-.top { height: 44px; flex: none; display: flex; align-items: center; padding-left: 8px; user-select: none; }
+.top { height: 48px; flex: none; display: flex; align-items: center; gap: 4px; padding-left: 10px; border-bottom: 1px solid var(--line); user-select: none; }
+.top [hidden] { display: none !important; }
+.top .brand { height: auto; padding: 6px 10px; gap: 9px; color: var(--text); }
+.top .brand b { flex: none; }
+.top .brand.on, .top .brand:hover { background: none; }
+.top .pill { padding: 5px 10px; gap: 8px; }
+.top .pill .txt { display: flex; align-items: baseline; gap: 8px; }
+.top .pill .det { max-width: 300px; }
+.top .primary { padding: 6px 12px; margin: 0 4px; }
+.top .primary kbd { color: inherit; border-color: rgba(0, 0, 0, .2); opacity: .7; }
+.top .upd { width: auto; }
+.top #navLive .dot { width: 7px; height: 7px; background: var(--accent); }
+.top .sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; flex: none; }
+@media (max-width: 1050px) { .top .pill .det, .top .brand b { display: none; } }
 .top .grow { flex: 1; align-self: stretch; }
 #expand { display: none; }
 body.collapsed #expand { display: inline-flex; }
@@ -145,6 +159,35 @@ h1 { font: 600 26px/1.2 var(--display); margin: 0; letter-spacing: -.01em; }
 h3 { font: 600 15px/1.3 var(--display); margin: 34px 0 12px; display: flex; align-items: baseline; gap: 10px; }
 h3 .muted { font: 400 12.5px var(--sans); }
 
+/* ---------- home: one row per match ---------- */
+.mhead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mhead h1 { margin-right: auto; }
+.mhead .find { margin: 0; width: 220px; }
+.seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--seg); }
+.seg button { padding: 5px 14px; border-radius: 8px; font-size: 12.5px; }
+.seg button.on { background: var(--active); color: var(--text); }
+.seg button .n { color: var(--faint); margin-left: 6px; font-family: var(--mono); font-size: 11.5px; }
+/* On/off settings are switches; checkboxes stay for picking items. */
+.set .c input[type=checkbox] { appearance: none; -webkit-appearance: none; width: 36px; height: 20px; margin: 0; border-radius: 99px; background: var(--track); position: relative; cursor: pointer; transition: background .12s; flex: none; }
+.set .c input[type=checkbox]::before { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform .12s, background .12s; }
+.set .c input[type=checkbox]:checked { background: var(--accent); }
+.set .c input[type=checkbox]:checked::before { transform: translateX(16px); background: var(--bg); }
+.set .c input[type=checkbox]:disabled { opacity: .35; cursor: default; }
+.mlist { margin-top: 14px; }
+.mlist .group { padding: 18px 8px 6px; }
+.mrow { display: flex; align-items: center; gap: 14px; padding: 10px 8px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.mrow:hover { background: var(--hover); }
+.mrow .meta { flex: 1; min-width: 0; line-height: 1.35; }
+.mrow .name { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mrow .name .Victory { color: var(--win); font-weight: 500; margin-left: 6px; }
+.mrow .name .Defeat { color: var(--bad); font-weight: 500; margin-left: 6px; }
+.mrow .sub { font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mrow .peek { display: flex; gap: 6px; flex: none; }
+.mrow .peek button { padding: 0; width: 96px; aspect-ratio: 16 / 9; border-radius: 6px; overflow: hidden; background: var(--raise); box-shadow: 0 0 0 1px var(--line); }
+.mrow .peek img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mrow .peek button:hover { box-shadow: 0 0 0 2px var(--accent); background: var(--raise); }
+.mrow .more { width: 30px; text-align: right; color: var(--faint); font-size: 12px; flex: none; }
+@media (max-width: 900px) { .mrow .peek button:nth-child(n+2) { display: none; } }
 /* ---------- home ---------- */
 .stats { display: flex; gap: 48px; margin: 22px 0 6px; flex-wrap: wrap; }
 .stats div b { display: block; font: 600 26px/1.1 var(--display); }
@@ -367,32 +410,20 @@ dl dd { font-family: var(--mono); font-size: 12px; }
 // Report script errors from the app window to the app log.
 window.addEventListener("error", e => { if (window.ipc) window.ipc.postMessage("log:" + e.message + " @" + e.lineno); });
 </script>
-<aside id="side">
-  <div class="brand" data-drag><img src="/favicon.ico" alt=""><b>League Highlights</b><button id="collapse" class="ibtn" title="Hide sidebar (Ctrl+B)" data-icon="sidebar"></button></div>
-  <div class="navs">
-    <button id="navHome" data-icon="grid">Highlights</button>
-    <button id="navLive" data-icon="chart" hidden>Live game<span class="dot"></span></button>
-    <button id="navSettings" data-icon="gear">Settings</button>
-    <button id="navStatus" data-icon="pulse">Status</button>
-  </div>
-  <div class="find"><span data-icon="search"></span><input type="text" id="search" placeholder="Search matches"><kbd>Ctrl K</kbd></div>
-  <div class="pills" id="pills"><button data-r="" class="on">All</button><button data-r="Victory">Wins</button><button data-r="Defeat">Losses</button></div>
-  <div id="matchList"></div>
-  <div class="foot">
-    <button class="upd" id="updBtn" hidden title="Open the release page"></button>
-    <div class="pill" id="statPill" title="Recorder status"><span class="dot" id="dot"></span><div class="txt"><div class="st"><span id="state">Starting</span> <span class="mono muted" id="timer"></span></div><div class="det" id="statusDetail"></div></div></div>
-    <div class="row2">
-      <button id="btnSave" class="primary" title="Save the last seconds now"><span data-icon="record"></span>Save clip <kbd id="hkFoot">F8</kbd></button>
-      <button id="btnToggle" class="ibtn" title="Pause recording" data-icon="pause"></button>
-      <button id="btnFolder" class="ibtn" title="Open clips folder" data-icon="folder"></button>
-    </div>
-  </div>
-</aside>
 <div id="resizeTop"></div>
 <main id="main">
   <div class="top" data-drag>
-    <button id="expand" class="ibtn" title="Show sidebar (Ctrl+B)" data-icon="sidebar"></button>
+    <button id="navHome" class="brand" title="Matches"><img src="/favicon.ico" alt=""><b>League Highlights</b></button>
     <span class="grow"></span>
+    <button class="upd" id="updBtn" hidden title="Open the release page"></button>
+    <button id="navLive" hidden title="Live game stats" data-icon="chart">Live game<span class="dot"></span></button>
+    <div class="pill" id="statPill" title="Recorder status"><span class="dot" id="dot"></span><div class="txt"><span class="st"><span id="state">Starting</span> <span class="mono muted" id="timer"></span></span><span class="det" id="statusDetail"></span></div></div>
+    <button id="btnSave" class="primary" title="Save the last seconds now"><span data-icon="record"></span>Save clip <kbd id="hkFoot">F8</kbd></button>
+    <button id="btnToggle" class="ibtn" title="Pause recording" data-icon="pause"></button>
+    <button id="btnFolder" class="ibtn" title="Open clips folder" data-icon="folder"></button>
+    <button id="navSettings" class="ibtn" title="Settings" data-icon="gear"></button>
+    <button id="navStatus" hidden></button>
+    <span class="sep"></span>
     <div class="wctl">
       <button data-w="min" title="Minimize" data-icon="wmin"></button>
       <button data-w="max" id="wMax" title="Maximize" data-icon="wmax"></button>
@@ -494,7 +525,7 @@ const state = { games: [], clips: [], game: null, clip: null, view: "home", last
 function show(view) {
   state.view = view;
   $$(".view").forEach(v => v.classList.toggle("on", v.id === view + "View"));
-  $("#navHome").classList.toggle("on", view === "home" || view === "review");
+  $("#navHome").classList.toggle("on", view === "home" || view === "review" || view === "match");
   $("#navSettings").classList.toggle("on", view === "settings");
   $("#navStatus").classList.toggle("on", view === "status");
   $("#navLive").classList.toggle("on", view === "live");
@@ -543,10 +574,7 @@ function setLivePage(url) {
   else placeLive();
 }
 window.addEventListener("resize", placeLive);
-$("#side").addEventListener("transitionend", placeLive);
 $("#statPill").onclick = () => show("status");
-const toggleSide = () => document.body.classList.toggle("collapsed");
-$("#collapse").onclick = toggleSide; $("#expand").onclick = toggleSide;
 
 /* ---------- custom title bar (app window only) ---------- */
 // Not named `ipc`: WebView2 already defines a global of that name.
@@ -670,7 +698,7 @@ const modeName = m => ({ CLASSIC: "Summoner's Rift", ARAM: "ARAM", CHERRY: "Aren
 function avatar(g, cls = "") {
   const letter = esc((g.champion || "?").charAt(0).toUpperCase());
   const img = artOn() && g.champion ? `<img loading="lazy" alt="" src="/champ/${encodeURIComponent(g.champion)}/icon" onerror="this.remove()">` : "";
-  return `<span class="cicon ${cls} ${g.result}">${letter}${img}</span>`;
+  return `<span class="cicon ${cls}">${letter}${img}</span>`;
 }
 const clock = d => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 function bucket(d) {
@@ -696,26 +724,32 @@ async function loadClips() {
 
 /* ---------- sidebar ---------- */
 function visibleGames() {
-  const q = $("#search").value.trim().toLowerCase();
+  const q = (state.query || "").trim().toLowerCase();
   return state.games.filter(g => (!state.result || g.result === state.result) && (!q || [g.champion, g.player, g.mode, ...g.clips.map(c => c.label)].join(" ").toLowerCase().includes(q)));
 }
 function renderMatches() {
+  const list = $("#matchList");
+  if (!list) return;
   let last = "";
-  $("#matchList").innerHTML = visibleGames().map(g => {
+  list.innerHTML = visibleGames().map(g => {
     const b = bucket(g.started);
     const head = b !== last ? `<div class="group">${b}</div>` : "";
     last = b;
-    // Start time first: it is what tells same-champion games apart.
+    const n = g.clips.length;
     const mode = g.mode && String(g.mode).toUpperCase() !== "CLASSIC" ? modeName(g.mode) : "";
-    const sub = [clock(g.started), g.result ? `<span class="${g.result}">${g.result}</span>` : "", g.kda, esc(mode)].filter(Boolean).join(" · ");
-    const tip = [dateText(g.started), g.result, g.mode && modeName(g.mode), g.duration && mmss(g.duration), g.kda && `KDA ${g.kda}`, `${g.clips.length} clip${g.clips.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
-    return `${head}<div class="match ${state.game && state.game.id === g.id ? "sel" : ""}" data-id="${esc(g.id)}" title="${esc(tip)}">
-      ${avatar(g)}<div class="meta"><div class="name">${esc(gameName(g))}</div><div class="sub">${sub}</div></div><span class="mono n">${g.clips.length}</span></div>`;
+    const sub = [g.ungrouped ? dateText(g.started) : clock(g.started), g.kda, `${n} clip${n === 1 ? "" : "s"}`, esc(mode)].filter(Boolean).join(" · ");
+    const best = [...g.clips].sort((x, y) => (y.highlight_score || 0) - (x.highlight_score || 0)).slice(0, 3);
+    const peek = best.map(c => `<button data-file="${esc(c.file)}" title="${esc(title(c.label))}">${c.has_thumb ? `<img loading="lazy" src="/thumb/${encodeURIComponent(c.file)}" alt="">` : ""}</button>`).join("");
+    return `${head}<div class="mrow" data-id="${esc(g.id)}" title="${esc(dateText(g.started))}">
+      ${avatar(g)}<div class="meta"><div class="name">${esc(gameName(g))}${g.result ? `<span class="${g.result}">${g.result}</span>` : ""}</div><div class="sub">${sub}</div></div>
+      <div class="peek">${peek}</div><span class="more">${n > 3 ? "+" + (n - 3) : ""}</span></div>`;
   }).join("") || `<div class="group">${state.games.length ? "No matches found" : "No matches yet"}</div>`;
-  $$("#matchList .match").forEach(el => el.onclick = () => openGame(state.games.find(g => g.id === el.dataset.id)));
+  $$("#matchList .mrow").forEach(el => el.onclick = e => {
+    const g = state.games.find(x => x.id === el.dataset.id);
+    const pick = e.target.closest("[data-file]");
+    openGame(g, pick ? g.clips.find(c => c.file === pick.dataset.file) : undefined);
+  });
 }
-$("#search").oninput = renderMatches;
-$$("#pills button").forEach(b => b.onclick = () => { state.result = b.dataset.r; $$("#pills button").forEach(x => x.classList.toggle("on", x === b)); renderMatches(); });
 
 /* ---------- tiles ---------- */
 function tile(c, showGame) {
@@ -725,8 +759,6 @@ function tile(c, showGame) {
     : `${c.event_game_time != null ? mmss(c.event_game_time) + " in match · " : ""}${c.automatic ? "Smart" : "Manual"}`;
   return `<button class="tile ${state.clip && state.clip.file === c.file ? "sel" : ""} ${state.sel.has(c.file) ? "picked" : ""}" data-file="${esc(c.file)}">
     <div class="th">${c.has_thumb ? `<img loading="lazy" src="/thumb/${encodeURIComponent(c.file)}" alt="">` : ""}
-      ${c.highlight_score ? `<span class="score">${c.highlight_score}</span>` : ""}
-      ${c.reviewed ? "" : `<span class="new" title="New"></span>`}
       <span class="badge">${mmss(c.duration_seconds)}</span><span class="play">${icon("play")}</span><span class="pick">${icon("check")}</span></div>
     <div class="cap">${showGame ? avatar(g, "sm") : ""}<div><div class="t">${esc(title(c.label))}${c.rating === "good" ? `<span class="rdot good"></span>` : c.rating === "bad" ? `<span class="rdot bad"></span>` : ""}</div><div class="s">${sub}</div></div></div>
   </button>`;
@@ -743,42 +775,31 @@ function bindTiles(root, showGame) {
 
 /* ---------- home ---------- */
 function renderHome() {
-  const clips = [...state.clips].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
-  if (!clips.length) {
+  if (!state.clips.length) {
     $("#home").innerHTML = `<div class="empty"><h1>No highlights yet</h1>Start a League game in Borderless mode and press <kbd>${esc(state.hotkey)}</kbd>,<br>or let Smart Highlights keep your best plays automatically.</div>`;
     return;
   }
-  const wins = state.games.filter(g => g.result === "Victory").length;
-  const best = clips.reduce((a, c) => (c.highlight_score || 0) > (a.highlight_score || 0) ? c : a, clips[0]);
-  const total = clips.reduce((a, c) => a + (c.duration_seconds || 0), 0);
-  const top = [...clips].filter(c => c.automatic).sort((a, b) => (b.highlight_score || 0) - (a.highlight_score || 0)).slice(0, 4);
-  const fresh = clips.filter(c => !c.reviewed);
-  const freshGame = fresh.length ? fresh[0]._game : null;
-  const st = state.storage;
+  const fresh = state.clips.filter(c => !c.reviewed).length;
+  const count = r => state.games.filter(g => !r || g.result === r).length;
+  const pill = (r, label) => `<button data-r="${r}" class="${(state.result || "") === r ? "on" : ""}">${label}<span class="n">${count(r).toLocaleString()}</span></button>`;
   $("#home").innerHTML = `
-    <h1>Highlights</h1>
-    <div class="stats">
-      <div><b>${state.games.filter(g => !g.ungrouped).length}</b><span>Matches</span></div>
-      <div><b>${clips.length}</b><span>Highlights</span></div>
-      <div><b>${wins}</b><span>Wins with clips</span></div>
-      <div><b>${best.highlight_score || "—"}</b><span>Best score</span></div>
-      <div><b>${mmss(total)}</b><span>Footage</span></div>
-    </div>
-    ${st ? `<div class="storage">${st.free_bytes ? `<span class="bar"><i style="width:${Math.min(100, (st.library_bytes + st.shared_bytes) / (st.library_bytes + st.shared_bytes + st.free_bytes) * 100).toFixed(1)}%"></i></span>` : ""}
-      <span class="mono">${size(st.library_bytes + st.shared_bytes)} used${st.free_bytes ? " · " + size(st.free_bytes) + " free" : ""}</span>
-      <button id="cleanBtn" title="Delete old clips that aren't rated Good">Clean up…</button></div>` : ""}
-    ${fresh.length ? `<div class="notice">${avatar(freshGame)}
-      <div class="txt"><b>${fresh.length} new highlight${fresh.length === 1 ? "" : "s"}</b> to review<div>Keep the good ones, delete the rest. Your choices tune Smart Highlights.</div></div>
-      <button class="primary" id="reviewBtn">${icon("play")}Review</button></div>` : ""}
-    ${top.length ? `<h3>Top plays <span class="muted">highest Smart Highlights scores</span></h3><div class="tiles" id="topTiles">${top.map(c => tile(c, true)).join("")}</div>` : ""}
-    <h3>Recent <span class="muted">${clips.length} clip${clips.length === 1 ? "" : "s"}</span></h3>
-    <div class="tiles" id="recentTiles">${clips.slice(0, 40).map(c => tile(c, true)).join("")}</div>`;
-  bindTiles($("#home"), true);
+    <div class="mhead"><h1>Matches</h1>
+      <div class="find">${icon("search")}<input type="text" id="search" placeholder="Search matches" value="${esc(state.query || "")}"></div>
+      <div class="seg" id="pills">${pill("", "All")}${pill("Victory", "Wins")}${pill("Defeat", "Losses")}</div></div>
+    ${fresh ? `<div class="notice"><div class="txt"><b>${fresh} new clip${fresh === 1 ? "" : "s"}</b> to review<div>Keep the good ones and delete the rest.</div></div>
+      <button class="outline" id="reviewBtn">${icon("play")}Review</button></div>` : ""}
+    <div class="mlist" id="matchList"></div>`;
+  renderMatches();
+  $("#search").oninput = e => { state.query = e.target.value; renderMatches(); };
+  $$("#pills button").forEach(b => b.onclick = () => { state.result = b.dataset.r; $$("#pills button").forEach(x => x.classList.toggle("on", x === b)); renderMatches(); });
   if ($("#reviewBtn")) $("#reviewBtn").onclick = () => openReview();
-  if ($("#cleanBtn")) $("#cleanBtn").onclick = cleanUp;
 }
 async function loadStorage() {
-  try { const r = await api("/api/storage"); state.storage = r.storage; state.cleanupPreview = r.cleanup_preview; if (state.view === "home") renderHome(); } catch {}
+  try { const r = await api("/api/storage"); state.storage = r.storage; state.cleanupPreview = r.cleanup_preview; if ($("#storageUse")) $("#storageUse").textContent = storageText(); } catch {}
+}
+function storageText() {
+  const st = state.storage;
+  return st ? `${size(st.library_bytes + st.shared_bytes)} used${st.free_bytes ? " · " + size(st.free_bytes) + " free" : ""}` : "…";
 }
 async function cleanUp() {
   const days = (state.settings && state.settings.cleanup_days) || 30;
@@ -830,7 +851,7 @@ async function renderSetup() {
   $$("#checks [data-fix]").forEach(b => b.onclick = () => {
     const fix = b.dataset.fix;
     if (fix === "download-ffmpeg") api("/api/action/download-ffmpeg", {});
-    else if (fix === "cleanup") { show("home"); cleanUp(); }
+    else if (fix === "cleanup") { show("settings"); cleanUp(); }
     else if (fix.startsWith("settings:")) openSettingsSection(fix.slice(9));
   });
   $("#setupAgain").onclick = renderSetup;
@@ -925,7 +946,8 @@ function openGame(game, clip, keepScroll) {
   if (state.view !== "match") {
     state.view = "match";
     $$(".view").forEach(v => v.classList.toggle("on", v.id === "matchView"));
-    ["#navHome", "#navSettings", "#navStatus", "#navLive"].forEach(s => $(s).classList.remove("on"));
+    ["#navSettings", "#navStatus", "#navLive"].forEach(s => $(s).classList.remove("on"));
+    $("#navHome").classList.add("on");
     placeLive();
   }
   state.game = game;
@@ -1354,10 +1376,12 @@ function renderSettings() {
       ${row("Notify when a clip is saved", "Windows notification when League isn't open.", check("notify_on_save", s))}
       ${row("Discord upload limit", "Discord copies are encoded to fit under this size.", `<select data-k="discord_target_mb" data-num>${opt([[9.5,"10 MB (free)"],[48,"50 MB (Nitro Basic)"],[480,"500 MB (Nitro)"]], s.discord_target_mb)}</select>`)}`],
     ["Storage", `
+      ${row("Space used", "Clips and Discord copies in your clip folder.", `<span class="mono muted" id="storageUse">${storageText()}</span><button id="cleanBtn" class="outline" title="Delete old clips that aren't rated Good">Clean up…</button>`)}
       ${row("Clip folder", "", `<input type="text" data-k="clip_dir" value="${esc(s.clip_dir)}" style="width:270px">`)}
       ${row("Automatic clean-up", "Deletes clips older than this. Clips you rated Good are always kept.", `<select data-k="cleanup_days" data-num>${opt([[0,"Off"],[14,"After 14 days"],[30,"After 30 days"],[60,"After 60 days"],[90,"After 90 days"]], s.cleanup_days)}</select>`)}`],
   ];
   $("#settingsPage").innerHTML = sections.map(([name, html], i) => `<h3 id="sec${i}">${name}</h3>${html}`).join("");
+  if ($("#cleanBtn")) $("#cleanBtn").onclick = cleanUp;
   $("#cats").innerHTML = sections.map(([name], i) => `<button data-s="sec${i}" class="${i ? "" : "on"}">${name}</button>`).join("");
   $$("#cats button").forEach(b => b.onclick = () => { $$("#cats button").forEach(x => x.classList.toggle("on", x === b)); $("#" + b.dataset.s).scrollIntoView({ behavior: "smooth" }); });
   $$("#settingsPage [data-k]").forEach(el => {
@@ -1432,7 +1456,6 @@ function commands() {
     { name: "Status", ic: "pulse", run: () => show("status") },
     { name: "Setup check", ic: "check", run: () => show("setup") },
     { name: "Open clips folder", ic: "folder", run: openFolder },
-    { name: "Toggle sidebar", ic: "sidebar", hint: "Ctrl B", run: toggleSide },
     ...state.games.map(g => ({ name: gameName(g) + (g.result ? " · " + g.result : ""), game: g, hint: dateText(g.started), run: () => openGame(g) })),
   ];
 }
@@ -1455,7 +1478,6 @@ window.addEventListener("keydown", e => {
   if (capturing) return;
   const palOpen = $("#palette").classList.contains("on");
   if (e.ctrlKey && e.key.toLowerCase() === "k") { e.preventDefault(); palOpen ? closePalette() : openPalette(); return; }
-  if (e.ctrlKey && e.key.toLowerCase() === "b") { e.preventDefault(); toggleSide(); return; }
   if (palOpen) {
     if (e.key === "Escape") closePalette();
     else if (e.key === "ArrowDown") { e.preventDefault(); palIndex = Math.min(palIndex + 1, palItems.length - 1); drawPalette(); }
