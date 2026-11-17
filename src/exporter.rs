@@ -266,6 +266,14 @@ impl Exporter {
         put("favorite", json!(false));
         write_meta(&output.with_extension("json"), &meta).map_err(|e| e.to_string())?;
         log::info!("Saved clip to {} ({size} bytes, {duration:.1}s)", output.display());
+        if s.auto_trim && request.automatic && !matches!(request.event_kind.as_str(), "death" | "long") {
+            if let Some((start, end)) = auto_trim_window(duration, suggestion.start, suggestion.end) {
+                match crate::library::trim(&self.ff, &output, start, end, true) {
+                    Ok(_) => log::info!("Trimmed to the action: {:.1}s to {:.1}s of {duration:.1}s", start, end),
+                    Err(e) => log::warn!("Automatic trim skipped: {e}"),
+                }
+            }
+        }
         Ok(output)
     }
 
@@ -310,6 +318,14 @@ impl Exporter {
             Err(error) => Err(format!("Could not save the clip: {}", last_line(&error))),
         }
     }
+}
+
+/// The Smart Trim range to apply automatically, if it is worth it: it must
+/// cut at least 4 s and leave at least 8 s.
+pub fn auto_trim_window(duration: f64, start: f64, end: f64) -> Option<(f64, f64)> {
+    let start = start.max(0.0);
+    let end = end.min(duration);
+    (end - start >= 8.0 && duration - (end - start) >= 4.0).then_some((start, end))
 }
 
 /// Thumbnails taken at the play; older clips are redone in the background.
@@ -483,6 +499,14 @@ mod tests {
         assert_eq!(trim, 40.0);
         let (selected, _, _, _) = select_tail(&timeline(), 12.0);
         assert_eq!(selected.len(), 6);
+    }
+
+    #[test]
+    fn automatic_trim_only_when_it_helps() {
+        assert_eq!(auto_trim_window(38.0, 12.0, 30.0), Some((12.0, 30.0)));
+        assert_eq!(auto_trim_window(16.0, 2.0, 15.0), None, "cuts only 3 s");
+        assert_eq!(auto_trim_window(20.0, 5.0, 11.0), None, "would leave under 8 s");
+        assert_eq!(auto_trim_window(30.0, -1.0, 40.0), None);
     }
 
     #[test]

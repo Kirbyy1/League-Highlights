@@ -163,10 +163,21 @@ impl Recorder {
 
     pub fn start(&self, settings: &Settings, window: &GameWindow) -> Result<(), String> {
         let mut last_error = String::from("Capture could not start.");
+        let mut av1_failed = false;
         for _ in 0..4 {
-            let encoder = self.ff.choose_encoder()?;
+            let h264 = self.ff.choose_encoder()?;
+            let av1 = (settings.video_codec == "av1" && !av1_failed).then(|| self.ff.av1_variant(h264)).flatten();
+            let encoder = av1.unwrap_or(h264);
             match self.start_with(settings, window, encoder) {
                 Ok(()) => return Ok(()),
+                Err(error) if av1.is_some() => {
+                    // AV1 didn't start: record in H.264 instead.
+                    self.stop();
+                    log::warn!("{encoder} failed to start ({error}); using {h264}");
+                    av1_failed = true;
+                    last_error = error;
+                    continue;
+                }
                 Err(error) => {
                     self.stop();
                     if encoder == "libx264" {
@@ -204,7 +215,7 @@ impl Recorder {
             // to the GPU first. The plain download pipeline stays as the
             // fallback, e.g. for laptops whose display adapter is not NVIDIA's.
             let mut backends = vec![Backend::Ddagrab];
-            if encoder == "h264_nvenc" && output_size(s, window).2 {
+            if encoder.ends_with("_nvenc") && output_size(s, window).2 {
                 backends.insert(0, Backend::DdagrabUpload);
             }
             for backend in backends {
@@ -529,7 +540,7 @@ fn filter_args(s: &Settings, w: &GameWindow, encoder: &str, backend: Backend) ->
     match backend {
         // NVENC consumes ddagrab's D3D11 frames directly (zero copy) when no
         // resize is required.
-        Backend::Ddagrab if encoder == "h264_nvenc" && !resize => Vec::new(),
+        Backend::Ddagrab if encoder.ends_with("_nvenc") && !resize => Vec::new(),
         // Resizing has to go through the CPU (scale_d3d11 fails to allocate
         // its textures in current FFmpeg builds), but the small frame goes
         // back to a D3D11 texture afterwards. Given CPU frames NVENC opens a

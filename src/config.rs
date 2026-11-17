@@ -127,6 +127,11 @@ pub struct Settings {
     pub auto_clip_deaths: bool,
     /// After each game, join its best plays into one match reel.
     pub auto_reel: bool,
+    /// Trim Smart Highlights clips to the action when they are saved.
+    pub auto_trim: bool,
+    /// "h264" (plays everywhere) or "av1" (about half the size; needs an
+    /// AV1 encoder: NVIDIA RTX 40+, Intel Arc or AMD RX 7000+).
+    pub video_codec: String,
 
     pub smart_highlights_enabled: bool,
     pub smart_sensitivity: String,
@@ -193,6 +198,8 @@ impl Default for Settings {
             auto_clip_victory: true,
             auto_clip_deaths: false,
             auto_reel: true,
+            auto_trim: true,
+            video_codec: "h264".into(),
             smart_highlights_enabled: true,
             smart_sensitivity: "balanced".into(),
             hotkey_vk: 0x77,
@@ -286,6 +293,9 @@ impl Settings {
         if self.hotkey_display.trim().is_empty() {
             self.hotkey_display = "F8".into();
         }
+        if !["h264", "av1"].contains(&self.video_codec.as_str()) {
+            self.video_codec = "h264".into();
+        }
         if !["save", "toggle"].contains(&self.hotkey_mode.as_str()) {
             self.hotkey_mode = "save".into();
         }
@@ -323,11 +333,12 @@ impl Settings {
     /// Settings that require the capture pipeline to restart when changed.
     pub fn capture_signature(&self) -> String {
         format!(
-            "{}x{}@{} q{} a{} buf{} mouse{} sys{}:{} mic{}:{}",
+            "{}x{}@{} q{} {} a{} buf{} mouse{} sys{}:{} mic{}:{}",
             self.width,
             self.height,
             self.fps,
             self.quality,
+            self.video_codec,
             self.audio_bitrate_kbps,
             self.buffer_seconds,
             self.draw_mouse,

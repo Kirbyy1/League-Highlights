@@ -1561,6 +1561,7 @@ function renderSettings() {
       ${row("Resolution", "League must run in Borderless or Windowed mode.", `<select data-k="resolution">${opt(RES, s.width + "x" + s.height)}</select>`)}
       ${row("Frame rate", "", `<select data-k="fps" data-num>${opt([[60,"60 FPS"],[30,"30 FPS"]], s.fps)}</select>`)}
       ${row("Quality", "NVENC, Quick Sync or AMF is used when available.", `<select data-k="quality" data-num>${opt(QUALITY, q)}</select>`)}
+      ${row("Video format", "AV1 makes clips about half the size at the same quality. It needs an NVIDIA RTX 40 or newer, Intel Arc or AMD RX 7000 graphics card, and some phones can't play it; Discord and vertical copies are always H.264.", `<select data-k="video_codec">${opt([["h264", "H.264 (plays everywhere)"], ["av1", "AV1 (half the size)"]], s.video_codec)}</select>`)}
       ${row("Buffer length", "How much footage the shortcut saves.", `<select data-k="buffer_seconds" data-num>${opt([[30,"30 seconds"],[45,"45 seconds"],[60,"60 seconds"],[90,"90 seconds"]], s.buffer_seconds)}</select>`)}
       ${row("Show mouse cursor", "", check("draw_mouse", s))}`],
     ["Audio", `
@@ -1586,6 +1587,7 @@ function renderSettings() {
       ${row("Baron steals", "", check("auto_clip_baron", s))}
       ${row("Herald, Voidgrub and Atakhan steals", "", check("auto_clip_other_steals", s))}
       ${row("Winning moment", "Saves the last seconds before the Nexus falls when you win.", check("auto_clip_victory", s))}
+      ${row("Trim to the action", "Cuts Smart Highlights clips to the plays when they're saved, without losing quality. Clips you save with the shortcut keep their full length.", check("auto_trim", s))}
       ${row("Save my deaths", "Keeps your deaths in their own section of each match, to learn from. They never go into Review.", check("auto_clip_deaths", s))}
       ${row("Match reel", "After each game, joins its three best plays into one video.", check("auto_reel", s))}
       ${row("Kill clips", "How much of the play before and after a kill.", `<select data-k="timing_kills" data-num>${opt([[-1, "Shorter"], [0, "Normal"], [1, "Longer"]], s.timing_kills)}</select>`)}

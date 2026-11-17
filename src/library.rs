@@ -445,6 +445,7 @@ pub fn trim(ff: &Ffmpeg, source: &Path, start: f64, end: f64, replace: bool) -> 
     meta.insert("suggested_trim_start".into(), json!(round3(suggestion.start)));
     meta.insert("suggested_trim_end".into(), json!(round3(suggestion.end)));
     meta.insert("smart_trim_reason".into(), json!(suggestion.reason));
+    meta.insert("thumb_v".into(), json!(crate::exporter::THUMB_VERSION));
     if let Some(ws) = window_start {
         meta.insert("clip_window_start_wall".into(), json!(ws + start));
         meta.insert("clip_window_end_wall".into(), json!(ws + end));
@@ -453,7 +454,7 @@ pub fn trim(ff: &Ffmpeg, source: &Path, start: f64, end: f64, replace: bool) -> 
         meta.remove(key);
     }
     write_meta(&final_path.with_extension("json"), &meta).map_err(|e| e.to_string())?;
-    thumbnail(ff, &final_path, &final_path.with_extension("jpg"), (new_duration * 0.45).max(0.1));
+    thumbnail(ff, &final_path, &final_path.with_extension("jpg"), crate::exporter::thumb_time(trigger, new_duration));
     Ok(final_path.file_name().unwrap().to_string_lossy().into_owned())
 }
 

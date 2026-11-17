@@ -105,6 +105,29 @@ impl Ffmpeg {
         Err("No usable H.264 encoder was found in FFmpeg.".into())
     }
 
+    /// The AV1 encoder on the same hardware as `h264` (NVENC, Quick Sync or
+    /// AMF), if this GPU has one. AV1 rather than HEVC because the library
+    /// window (WebView2) can't play HEVC. The CPU encoder is never used: it is
+    /// too heavy to run next to the game.
+    pub fn av1_variant(&self, h264: &str) -> Option<&'static str> {
+        static TESTED: Mutex<Vec<(&'static str, bool)>> = Mutex::new(Vec::new());
+        let av1: &'static str = match h264 {
+            "h264_nvenc" => "av1_nvenc",
+            "h264_qsv" => "av1_qsv",
+            "h264_amf" => "av1_amf",
+            _ => return None,
+        };
+        if let Some((_, ok)) = TESTED.lock().unwrap().iter().find(|(e, _)| *e == av1) {
+            return ok.then_some(av1);
+        }
+        let ok = self.test_encoder(av1);
+        TESTED.lock().unwrap().push((av1, ok));
+        if !ok {
+            log::warn!("{av1} is not available on this GPU; recording in H.264");
+        }
+        ok.then_some(av1)
+    }
+
     pub fn mark_unhealthy(&self, encoder: &str, reason: &str) {
         if let Some(known) = ENCODERS.iter().find(|e| **e == encoder) {
             let mut state = self.encoders.lock().unwrap();
@@ -283,14 +306,36 @@ fn search_path(name: &str) -> Option<PathBuf> {
 /// NVENC, B-frames cost ~190 MB of private memory (extra reference and
 /// reorder surfaces) for ~12% smaller files, which is the wrong trade for a
 /// recorder that runs next to the game.
+#[cfg(test)]
+mod codec_tests {
+    #[test]
+    fn av1_uses_its_own_quality_scale() {
+        let h264 = super::encoder_args("h264_nvenc", 22).join(" ");
+        let av1 = super::encoder_args("av1_nvenc", 22).join(" ");
+        assert!(h264.contains("-cq 22") && h264.contains("-maxrate 20M"));
+        assert!(av1.contains("-c:v av1_nvenc") && av1.contains("-cq 34") && av1.contains("-maxrate 12M"));
+    }
+}
+
 pub fn encoder_args(encoder: &str, quality: u32) -> Vec<String> {
     let q = quality.to_string();
+    // AV1 quantizers run 0-63: measured on game footage, H.264 cq 22 and AV1
+    // cq 34 look the same, and AV1 is about half the size.
+    let q_av1 = (quality + 12).min(63).to_string();
+    let q = if encoder.starts_with("av1") { q_av1 } else { q };
     let list: Vec<&str> = match encoder {
         "h264_nvenc" => vec![
             "-c:v", encoder, "-preset", "p4", "-tune", "hq", "-rc", "vbr", "-cq", &q, "-b:v", "0",
             "-maxrate", "20M", "-bufsize", "40M", "-bf", "0",
         ],
-        "h264_qsv" => vec!["-c:v", encoder, "-preset", "medium", "-global_quality", &q, "-bf", "0"],
+        "av1_nvenc" => vec![
+            "-c:v", encoder, "-preset", "p4", "-tune", "hq", "-rc", "vbr", "-cq", &q, "-b:v", "0",
+            "-maxrate", "12M", "-bufsize", "24M", "-bf", "0",
+        ],
+        "h264_qsv" | "av1_qsv" => vec!["-c:v", encoder, "-preset", "medium", "-global_quality", &q, "-bf", "0"],
+        "av1_amf" => vec![
+            "-c:v", encoder, "-quality", "speed", "-rc", "cqp", "-qp_i", &q, "-qp_p", &q, "-bf", "0",
+        ],
         "h264_amf" => vec![
             "-c:v", encoder, "-quality", "speed", "-rc", "cqp", "-qp_i", &q, "-qp_p", &q, "-bf", "0",
         ],
