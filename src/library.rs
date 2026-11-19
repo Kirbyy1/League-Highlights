@@ -2,8 +2,10 @@
 //! The JSON layout is identical to the Python version, so existing libraries
 //! open unchanged.
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
@@ -13,22 +15,24 @@ use crate::models::{round3, MatchContext, StoredEvent};
 use crate::scoring::suggest_trim;
 use crate::util::{local_time, now};
 
+fn parse_meta(text: &str) -> Map<String, Value> {
+    match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {
+        Ok(Value::Object(map)) => map,
+        _ => Map::new(),
+    }
+}
+
 pub fn read_meta(path: &Path) -> Map<String, Value> {
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(t.trim_start_matches('\u{feff}')).ok())
-        .and_then(|v| match v {
-            Value::Object(map) => Some(map),
-            _ => None,
-        })
-        .unwrap_or_default()
+    fs::read_to_string(path).map(|t| parse_meta(&t)).unwrap_or_default()
 }
 
 pub fn write_meta(path: &Path, meta: &Map<String, Value>) -> std::io::Result<()> {
     let text = serde_json::to_string_pretty(meta).map_err(std::io::Error::other)?;
     let temp = path.with_extension("json.tmp");
     fs::write(&temp, text)?;
-    fs::rename(&temp, path)
+    fs::rename(&temp, path)?;
+    forget(path);
+    Ok(())
 }
 
 fn is_copy(stem: &str, meta: &Map<String, Value>) -> bool {
@@ -41,33 +45,101 @@ fn is_copy(stem: &str, meta: &Map<String, Value>) -> bool {
         || lower.contains("_share_")
 }
 
+/// Metadata text by JSON file name (lower case), with the size and time of
+/// the file it was read from.
+///
+/// Listing the library used to open every clip's JSON, about 1 ms each
+/// because every open is also virus-scanned: 157 clips took 175 ms, on every
+/// refresh of the library window. With the cache a listing reads the directory
+/// and only the files that changed. It keeps text rather than parsed objects
+/// (about 3 KB per clip) and only exists while the library window is open, so
+/// the tray app's idle memory is unchanged.
+type MetaCache = HashMap<String, ((u64, u128), String)>;
+static META_CACHE: Mutex<Option<(PathBuf, MetaCache)>> = Mutex::new(None);
+
+/// Drop the cache (the library window closed).
+pub fn drop_cache() {
+    *META_CACHE.lock().unwrap() = None;
+}
+
+/// Forget one file's cached metadata (it was just rewritten).
+fn forget(json: &Path) {
+    if let Some((dir, cache)) = META_CACHE.lock().unwrap().as_mut() {
+        if json.parent() == Some(dir.as_path()) {
+            if let Some(name) = json.file_name() {
+                cache.remove(&name.to_string_lossy().to_lowercase());
+            }
+        }
+    }
+}
+
 /// All highlights, newest first, as metadata objects for the UI.
 pub fn scan(dir: &Path) -> Vec<Value> {
+    scan_with(dir, crate::window::is_open())
+}
+
+fn scan_with(dir: &Path, use_cache: bool) -> Vec<Value> {
     let mut clips = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else { return clips };
+    // One pass over the directory gives every file's size and time without
+    // opening anything: lower-case name -> (name, size, modified).
+    let mut listing: HashMap<String, (String, u64, Duration)> = HashMap::new();
     for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()).map(str::to_lowercase).as_deref() != Some("mp4") {
+        let Ok(info) = entry.metadata() else { continue };
+        if !info.is_file() {
             continue;
         }
-        let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else { continue };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let modified = info.modified().ok().and_then(|m| m.duration_since(UNIX_EPOCH).ok()).unwrap_or_default();
+        listing.insert(name.to_lowercase(), (name, info.len(), modified));
+    }
+    let mut guard = META_CACHE.lock().unwrap();
+    if use_cache {
+        if guard.as_ref().is_none_or(|(cached_dir, _)| cached_dir != dir) {
+            *guard = Some((dir.to_path_buf(), MetaCache::new()));
+        }
+    } else if guard.as_ref().is_some_and(|(cached_dir, _)| cached_dir != dir) {
+        *guard = None;
+    }
+    let mut cache = if use_cache { guard.as_mut().map(|(_, cache)| cache) } else { None };
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for (lower, (name, size, modified)) in &listing {
+        let Some(stem_lower) = lower.strip_suffix(".mp4") else { continue };
+        let stem = &name[..name.len() - 4];
         if stem.contains(".trim-") {
             continue;
         }
-        let mut meta = read_meta(&path.with_extension("json"));
+        let json_key = format!("{stem_lower}.json");
+        let mut meta = match listing.get(&json_key) {
+            None => Map::new(),
+            Some((json_name, json_size, json_modified)) => {
+                let signature = (*json_size, json_modified.as_nanos());
+                match cache.as_mut() {
+                    Some(cache) => {
+                        seen.insert(json_key.clone());
+                        match cache.get(&json_key) {
+                            Some((cached, text)) if *cached == signature => parse_meta(text),
+                            _ => {
+                                let text = fs::read_to_string(dir.join(json_name)).unwrap_or_default();
+                                let meta = parse_meta(&text);
+                                cache.insert(json_key.clone(), (signature, text));
+                                meta
+                            }
+                        }
+                    }
+                    None => read_meta(&dir.join(json_name)),
+                }
+            }
+        };
         // Match reels from the Python version are hidden; reels made by this
         // version (event_kind "montage") are listed like any clip.
         let legacy_reel = meta.get("is_match_reel").and_then(Value::as_bool).unwrap_or(false)
             && meta.get("event_kind").and_then(Value::as_str) != Some("montage");
-        if is_copy(&stem, &meta) || legacy_reel {
+        if is_copy(stem, &meta) || legacy_reel {
             continue;
         }
-        let Ok(info) = entry.metadata() else { continue };
-        let mtime = info
-            .modified()
-            .ok()
-            .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
-            .map_or(0.0, |d| d.as_secs_f64());
+        let mtime = modified.as_secs_f64();
         if !meta.get("created_at").is_some_and(Value::is_string) {
             meta.insert("created_at".into(), json!(local_time(mtime).iso()));
         }
@@ -79,14 +151,18 @@ pub fn scan(dir: &Path) -> Vec<Value> {
         if !meta.get("label").is_some_and(Value::is_string) {
             meta.insert("label".into(), json!("MANUAL CLIP"));
         }
-        meta.insert("file".into(), json!(path.file_name().unwrap().to_string_lossy()));
-        meta.insert("size_bytes".into(), json!(info.len()));
-        meta.insert("has_thumb".into(), json!(path.with_extension("jpg").is_file()));
+        meta.insert("file".into(), json!(name));
+        meta.insert("size_bytes".into(), json!(size));
+        meta.insert("has_thumb".into(), json!(listing.contains_key(&format!("{stem_lower}.jpg"))));
         meta.insert("mtime".into(), json!(mtime));
         clips.push(Value::Object(meta));
     }
+    if let Some(cache) = cache.as_mut() {
+        cache.retain(|key, _| seen.contains(key));
+    }
+    drop(guard);
     clips.sort_by(|a, b| {
-        let key = |v: &Value| v["created_at"].as_str().unwrap_or("").to_string();
+        let key = |v: &Value| (v["created_at"].as_str().unwrap_or("").to_string(), v["file"].as_str().unwrap_or("").to_string());
         key(b).cmp(&key(a))
     });
     clips
@@ -144,8 +220,16 @@ pub fn finalize_match(dir: &Path, ctx: &MatchContext, result: &str) {
             changed += 1;
         }
     }
+    if result != "WIN" && result != "LOSE" {
+        RESULTS_PENDING.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
     log::info!("Finalized game group {} with {changed} clip(s)", ctx.match_id);
 }
+
+/// Set when a match was saved without a Win or Loss (and at startup, for
+/// older ones). The League Client watcher only scans the library while this
+/// is set, instead of reading every clip's metadata once a minute.
+pub static RESULTS_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// Bumped when clip metadata changes in the background, so an open library
 /// window knows to reload (for example a result filled in from match history).
@@ -479,5 +563,46 @@ mod reel_listing_tests {
         assert!(names.contains(&"A_MATCH_REEL_1.mp4".to_string()), "{names:?}");
         assert!(names.contains(&"C_KILL.mp4".to_string()));
         assert!(!names.contains(&"B_REEL_PY.mp4".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod scan_cache_tests {
+    use super::*;
+
+    #[test]
+    fn cached_listing_matches_and_follows_changes() {
+        let dir = std::env::temp_dir().join(format!("lh-scan-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for (name, label) in [("A_KILL", "SINGLE KILL"), ("B_KILL", "DOUBLE KILL")] {
+            fs::write(dir.join(format!("{name}.mp4")), b"video").unwrap();
+            fs::write(dir.join(format!("{name}.jpg")), b"jpg").unwrap();
+            write_meta(&dir.join(format!("{name}.json")), json!({"label": label, "created_at": name}).as_object().unwrap()).unwrap();
+        }
+        fs::write(dir.join("NO_META.mp4"), b"video").unwrap();
+        let plain = scan_with(&dir, false);
+        let first = scan_with(&dir, true);
+        let again = scan_with(&dir, true); // served from the cache
+        assert_eq!(plain, first);
+        assert_eq!(first, again);
+        assert_eq!(first.len(), 3);
+        let clip = |list: &[Value], file: &str| list.iter().find(|c| c["file"] == file).cloned().unwrap();
+        assert_eq!(clip(&first, "A_KILL.mp4")["has_thumb"], true);
+        assert_eq!(clip(&first, "NO_META.mp4")["label"], "MANUAL CLIP");
+
+        // Rewritten through the app: seen at once.
+        set_rating(&dir.join("A_KILL.mp4"), "good").unwrap();
+        assert_eq!(clip(&scan_with(&dir, true), "A_KILL.mp4")["rating"], "good");
+        // Edited by another program (size changes): seen too.
+        fs::write(dir.join("B_KILL.json"), r#"{"label": "TRIPLE KILL", "created_at": "B_KILL", "note": "edited"}"#).unwrap();
+        assert_eq!(clip(&scan_with(&dir, true), "B_KILL.mp4")["label"], "TRIPLE KILL");
+        // Deleted: gone from the listing and from the cache.
+        delete(&dir.join("A_KILL.mp4"));
+        let after = scan_with(&dir, true);
+        assert!(after.iter().all(|c| c["file"] != "A_KILL.mp4"));
+        assert!(!META_CACHE.lock().unwrap().as_ref().unwrap().1.contains_key("a_kill.json"));
+        drop_cache();
+        let _ = fs::remove_dir_all(&dir);
     }
 }

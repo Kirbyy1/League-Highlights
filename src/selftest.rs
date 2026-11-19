@@ -1,6 +1,9 @@
 //! `LeagueHighlights.exe --selftest`: records the primary monitor for a few
 //! seconds and saves one clip, exercising capture, audio, segment timing,
 //! the export mux and the thumbnail without needing a League game.
+//! `--selftest --smart` records longer and saves the clip the way Smart
+//! Highlights does (an event with pre- and post-roll), which also exercises
+//! trimming to the action.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +21,7 @@ use crate::recorder::Recorder;
 use crate::util::now;
 use crate::win::GameWindow;
 
-pub fn run(paths: &Paths, cfg: SharedSettings, ff: Option<Arc<Ffmpeg>>, seconds: u64, synthetic: bool) -> Result<String, String> {
+pub fn run(paths: &Paths, cfg: SharedSettings, ff: Option<Arc<Ffmpeg>>, seconds: u64, synthetic: bool, smart: bool) -> Result<String, String> {
     let ff = ff.ok_or("FFmpeg was not found")?;
     let (width, height, monitor_index) = unsafe {
         let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
@@ -55,20 +58,42 @@ pub fn run(paths: &Paths, cfg: SharedSettings, ff: Option<Arc<Ffmpeg>>, seconds:
         return Err(format!("Capture failed: {e}"));
     }
     let startup = now() - started;
-    std::thread::sleep(Duration::from_secs(seconds));
+    let tracker = Arc::new(EventTracker::new(120.0));
+    let request = if smart {
+        // A kill 17 s in, clipped with 14 s before and 3 s after, as Smart
+        // Highlights would.
+        std::thread::sleep(Duration::from_secs(17));
+        let wall = now();
+        tracker.record("CHAMPION_KILL", 0.0, "", wall);
+        std::thread::sleep(Duration::from_secs(4));
+        HighlightRequest {
+            label: "SELF TEST KILL".into(),
+            event_started_at: Some(wall),
+            event_ended_at: Some(wall),
+            pre_seconds: 14.0,
+            post_seconds: 3.0,
+            event_kind: "kill".into(),
+            automatic: true,
+            triggered_at_wall: Some(wall),
+            highlight_score: 50,
+            ..Default::default()
+        }
+    } else {
+        std::thread::sleep(Duration::from_secs(seconds));
+        HighlightRequest {
+            label: "SELF TEST".into(),
+            triggered_at_wall: Some(now()),
+            highlight_score: 100,
+            ..Default::default()
+        }
+    };
     let exporter = Exporter {
         cfg,
         paths: paths.clone(),
         ff,
         recorder: recorder.clone(),
         audio: audio.clone(),
-        tracker: Arc::new(EventTracker::new(120.0)),
-    };
-    let request = HighlightRequest {
-        label: "SELF TEST".into(),
-        triggered_at_wall: Some(now()),
-        highlight_score: 100,
-        ..Default::default()
+        tracker,
     };
     let export_started = now();
     let result = exporter.export(&request);
@@ -82,7 +107,7 @@ pub fn run(paths: &Paths, cfg: SharedSettings, ff: Option<Arc<Ffmpeg>>, seconds:
     Ok(format!(
         "Saved {}\nCapture: {} via {} ({}x{} on output {monitor_index}), started in {startup:.1}s\n\
          FPS {:.1}, frames {}, dropped {}, duplicated {}\nAudio: {} {}\n\
-         Clip duration {:.1}s, size {} bytes, thumbnail {}, export took {export_seconds:.1}s",
+         Clip duration {:.1}s, size {} bytes, thumbnail {}, export took {export_seconds:.1}s{}",
         path.display(),
         diag.encoder,
         diag.capture_backend,
@@ -97,5 +122,14 @@ pub fn run(paths: &Paths, cfg: SharedSettings, ff: Option<Arc<Ffmpeg>>, seconds:
         meta.get("duration_seconds").and_then(|v| v.as_f64()).unwrap_or(0.0),
         meta.get("size_bytes").map(|v| v.to_string()).unwrap_or_default(),
         if path.with_extension("jpg").is_file() { "yes" } else { "no" },
+        if smart {
+            format!(
+                "\nSmart clip: trimmed to the action {}, play at {:.1}s of the clip",
+                meta.get("auto_trimmed").and_then(|v| v.as_bool()).unwrap_or(false),
+                meta.get("trigger_relative_seconds").and_then(|v| v.as_f64()).unwrap_or(0.0)
+            )
+        } else {
+            String::new()
+        },
     ))
 }

@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 
 use serde_json::Value;
 
@@ -120,9 +121,24 @@ pub fn watch_client(cfg: SharedSettings) {
         let agent = history_agent();
         let mut misses: HashMap<String, u32> = HashMap::new();
         loop {
-            if credentials().is_some() {
+            // The library is only read when a match is waiting for a result
+            // and the client is open. Before, every clip's metadata was read
+            // once a minute for as long as the client ran (during games too).
+            if crate::library::RESULTS_PENDING.load(Ordering::SeqCst) && credentials().is_some() {
+                // Cleared first, so a match that ends while this runs sets it again.
+                crate::library::RESULTS_PENDING.store(false, Ordering::SeqCst);
                 let dir = cfg.read().unwrap().clip_dir();
-                fill_unknown_results(&agent, &dir, &mut misses);
+                let waiting = match fill_unknown_results(&agent, &dir, &mut misses) {
+                    // The client didn't answer: ask again next minute.
+                    None => true,
+                    // Still waiting only for matches not yet given up on.
+                    Some(_) => crate::library::unknown_results(&dir)
+                        .iter()
+                        .any(|(id, ..)| misses.get(id).copied().unwrap_or(0) < 5),
+                };
+                if waiting {
+                    crate::library::RESULTS_PENDING.store(true, Ordering::SeqCst);
+                }
             }
             std::thread::sleep(std::time::Duration::from_secs(60));
         }

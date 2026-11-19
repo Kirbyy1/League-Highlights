@@ -621,7 +621,7 @@ dependencies = [
 
 [[package]]
 name = "league-highlights"
-version = "2.3.0"
+version = "2.3.1"
 dependencies = [
  "log",
  "native-tls",

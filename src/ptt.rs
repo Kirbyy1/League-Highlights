@@ -12,6 +12,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 
 /// The key or mouse button (virtual-key code); 0 = push to talk off.
 static KEY: AtomicU32 = AtomicU32::new(0);
+/// A game is running: the only time the key needs watching.
+static IN_GAME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_in_game(on: bool) {
+    IN_GAME.store(on, Ordering::SeqCst);
+}
 /// Held intervals as (pressed, released) wall-clock times; released is
 /// f64::INFINITY while the key is still down. Older than 15 minutes is dropped.
 static HELD: Mutex<VecDeque<(f64, f64)>> = Mutex::new(VecDeque::new());
@@ -39,9 +45,15 @@ pub fn start() {
         let mut down = false;
         loop {
             let vk = KEY.load(Ordering::SeqCst);
-            if vk == 0 {
-                down = false;
-                std::thread::sleep(Duration::from_millis(250));
+            if vk == 0 || !IN_GAME.load(Ordering::SeqCst) {
+                // Off, or no game: one wake-up a second instead of fifty.
+                if down {
+                    down = false;
+                    if let Some(last) = HELD.lock().unwrap().back_mut() {
+                        last.1 = last.1.min(crate::util::now());
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(1));
                 continue;
             }
             let now = crate::util::now();

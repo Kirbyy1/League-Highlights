@@ -117,13 +117,16 @@ impl Ffmpeg {
             "h264_amf" => "av1_amf",
             _ => return None,
         };
-        if let Some((_, ok)) = TESTED.lock().unwrap().iter().find(|(e, _)| *e == av1) {
-            return ok.then_some(av1);
+        // A pass is remembered; a failure is tried again next time, because a
+        // busy GPU at game start can fail the test once.
+        if TESTED.lock().unwrap().iter().any(|(e, ok)| *e == av1 && *ok) {
+            return Some(av1);
         }
         let ok = self.test_encoder(av1);
-        TESTED.lock().unwrap().push((av1, ok));
-        if !ok {
-            log::warn!("{av1} is not available on this GPU; recording in H.264");
+        if ok {
+            TESTED.lock().unwrap().push((av1, true));
+        } else {
+            log::warn!("{av1} did not pass its test; recording in H.264 this time");
         }
         ok.then_some(av1)
     }

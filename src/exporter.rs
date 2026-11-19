@@ -127,7 +127,7 @@ impl Exporter {
                 s.hotkey_display
             ));
         }
-        let (selected, trim_start, trim_duration, requested) = match precise {
+        let (mut selected, trim_start, trim_duration, requested) = match precise {
             Some((start, end)) => select_precise(&timeline, start, end)?,
             None => {
                 let requested = fallback_duration(&label, s.buffer_seconds);
@@ -140,9 +140,54 @@ impl Exporter {
                 s.hotkey_display
             ));
         }
-        let selected_start = selected[0].start_wall;
-        let selected_end = selected[selected.len() - 1].end_wall;
-        let duration = selected.iter().map(|seg| seg.end_wall - seg.start_wall).sum::<f64>();
+        // The event window that was asked for, on the wall clock.
+        let window_start = selected[0].start_wall + trim_start;
+        let window_end = window_start + trim_duration;
+        let trigger_wall = request.triggered_at_wall.or(request.event_ended_at).or(request.event_started_at);
+        let manual = request.event_kind == "manual" || !request.automatic;
+        // Everything about the clip that depends on which segments are kept.
+        let describe = |selected: &[TimedSegment]| {
+            let start = selected[0].start_wall;
+            let end = selected[selected.len() - 1].end_wall;
+            let duration = selected.iter().map(|seg| seg.end_wall - seg.start_wall).sum::<f64>();
+            let trigger_relative = (trigger_wall.unwrap_or(end) - start).clamp(0.0, duration);
+            let mut events = self.tracker.events_for_clip(start, end, &request.match_id);
+            let expected = request_event_type(request);
+            if !events
+                .iter()
+                .any(|e| e.event_type == expected && (e.relative_time - trigger_relative).abs() <= 1.5)
+            {
+                events.push(StoredEvent {
+                    relative_time: trigger_relative,
+                    event_type: expected,
+                    game_time: request.event_game_time,
+                });
+                events.sort_by(|a, b| a.relative_time.total_cmp(&b.relative_time));
+            }
+            let suggestion = suggest_trim(duration, &events, Some(trigger_relative), manual);
+            (start, end, duration, trigger_relative, events, suggestion)
+        };
+        let (mut selected_start, mut selected_end, mut duration, mut trigger_relative, mut events, mut suggestion) =
+            describe(&selected);
+
+        // Trim to the action before saving, by keeping only the 2-second
+        // segments the Smart Trim range touches. The clip is written once;
+        // trimming it afterwards cost two more FFmpeg runs and a second copy
+        // of the file.
+        let mut auto_trimmed = false;
+        if s.auto_trim && request.automatic && !matches!(request.event_kind.as_str(), "death" | "long") {
+            if let Some((from, to)) = auto_trim_window(duration, suggestion.start, suggestion.end) {
+                let kept = keep_window(&selected, selected_start + from, selected_start + to);
+                if !kept.is_empty() && kept.len() < selected.len() {
+                    log::info!("Trimmed to the action: {from:.1}s to {to:.1}s of {duration:.1}s");
+                    selected = kept;
+                    (selected_start, selected_end, duration, trigger_relative, events, suggestion) = describe(&selected);
+                    auto_trimmed = true;
+                }
+            }
+        }
+        let window_start = window_start.max(selected_start);
+        let window_end = window_end.min(selected_end);
 
         let created = now();
         let stamp = local_time(created);
@@ -158,14 +203,13 @@ impl Exporter {
 
         let work = self.paths.root.join("export").join(format!("{}", (created * 1000.0) as u64));
         fs::create_dir_all(&work).map_err(|e| e.to_string())?;
-        // Preview frame: just before the play itself, not the first frame.
-        let moment = request
-            .triggered_at_wall
-            .or(request.event_ended_at)
-            .or(request.event_started_at)
-            .map_or(duration / 2.0, |w| w - selected_start);
-        let thumb_at = thumb_time(moment, duration);
-        let result = self.mux(&s, &work, &selected, selected_start, selected_end, &partial, &thumb, thumb_at);
+        // Preview frame: the play itself, not the start of the clip. It is the
+        // first frame of the 2-second segment that starts nearest to the play,
+        // so exactly one frame is decoded. (Decoding the clip up to the play
+        // cost 10 s of CPU per H.264 clip and 30 s per AV1 clip, mid-game.)
+        let moment = trigger_wall.map_or(selected_start + duration / 2.0, |w| w);
+        let thumb_from = thumb_source(&selected, moment);
+        let result = self.mux(&s, &work, &selected, selected_start, selected_end, &partial, &thumb, &thumb_from);
         let _ = fs::remove_dir_all(&work);
         let audio = match result {
             Ok(audio) => audio,
@@ -180,30 +224,6 @@ impl Exporter {
             return Err("The saved highlight file is incomplete.".into());
         }
         fs::rename(&partial, &output).map_err(|e| e.to_string())?;
-
-        let window_start = selected_start + trim_start;
-        let window_end = window_start + trim_duration;
-        let trigger_wall = request
-            .triggered_at_wall
-            .or(request.event_ended_at)
-            .or(request.event_started_at)
-            .unwrap_or(selected_end);
-        let trigger_relative = (trigger_wall - selected_start).clamp(0.0, duration);
-        let mut events = self.tracker.events_for_clip(selected_start, selected_end, &request.match_id);
-        let expected = request_event_type(request);
-        if !events
-            .iter()
-            .any(|e| e.event_type == expected && (e.relative_time - trigger_relative).abs() <= 1.5)
-        {
-            events.push(StoredEvent {
-                relative_time: trigger_relative,
-                event_type: expected,
-                game_time: request.event_game_time,
-            });
-            events.sort_by(|a, b| a.relative_time.total_cmp(&b.relative_time));
-        }
-        let manual = request.event_kind == "manual" || !request.automatic;
-        let suggestion = suggest_trim(duration, &events, Some(trigger_relative), manual);
 
         let mut meta = Map::new();
         let mut put = |k: &str, v: Value| {
@@ -264,16 +284,9 @@ impl Exporter {
         put("quality_mode", json!("original_recording"));
         put("thumb_v", json!(THUMB_VERSION));
         put("favorite", json!(false));
+        put("auto_trimmed", json!(auto_trimmed));
         write_meta(&output.with_extension("json"), &meta).map_err(|e| e.to_string())?;
         log::info!("Saved clip to {} ({size} bytes, {duration:.1}s)", output.display());
-        if s.auto_trim && request.automatic && !matches!(request.event_kind.as_str(), "death" | "long") {
-            if let Some((start, end)) = auto_trim_window(duration, suggestion.start, suggestion.end) {
-                match crate::library::trim(&self.ff, &output, start, end, true) {
-                    Ok(_) => log::info!("Trimmed to the action: {:.1}s to {:.1}s of {duration:.1}s", start, end),
-                    Err(e) => log::warn!("Automatic trim skipped: {e}"),
-                }
-            }
-        }
         Ok(output)
     }
 
@@ -288,7 +301,7 @@ impl Exporter {
         end: f64,
         partial: &Path,
         thumb: &Path,
-        thumb_at: f64,
+        thumb_from: &Path,
     ) -> Result<(bool, bool), String> {
         let list = work.join("segments.txt");
         let text: String = selected
@@ -307,17 +320,37 @@ impl Exporter {
         }
         let flags = (audio.system.is_some(), audio.microphone.is_some());
 
-        match self.ff.run(&mux_args(s, &list, &inputs, partial, thumb, thumb_at), Duration::from_secs(120)) {
+        match self.ff.run(&mux_args(s, &list, &inputs, partial, thumb, thumb_from), Duration::from_secs(120)) {
             Ok(()) => Ok(flags),
             Err(error) if !inputs.is_empty() => {
                 log::warn!("Could not attach audio ({}); saving a video-only clip", last_line(&error));
                 self.ff
-                    .run(&mux_args(s, &list, &[], partial, thumb, thumb_at), Duration::from_secs(90))
+                    .run(&mux_args(s, &list, &[], partial, thumb, thumb_from), Duration::from_secs(90))
                     .map(|_| (false, false))
             }
             Err(error) => Err(format!("Could not save the clip: {}", last_line(&error))),
         }
     }
+}
+
+/// The contiguous run of segments that overlaps [from, to] on the wall clock.
+fn keep_window(selected: &[TimedSegment], from: f64, to: f64) -> Vec<TimedSegment> {
+    selected
+        .iter()
+        .filter(|seg| seg.end_wall > from + 0.01 && seg.start_wall < to - 0.01)
+        .cloned()
+        .collect()
+}
+
+/// The segment whose first frame is nearest to wall-clock time `at`. Every
+/// segment starts on a keyframe, so its first frame decodes on its own.
+fn thumb_source(selected: &[TimedSegment], at: f64) -> PathBuf {
+    selected
+        .iter()
+        .min_by(|a, b| (a.start_wall - at).abs().total_cmp(&(b.start_wall - at).abs()))
+        .unwrap_or(&selected[0])
+        .path
+        .clone()
 }
 
 /// The Smart Trim range to apply automatically, if it is worth it: it must
@@ -359,7 +392,7 @@ fn mux_args(
     audio: &[(PathBuf, f64, String)],
     partial: &Path,
     thumb: &Path,
-    thumb_at: f64,
+    thumb_from: &Path,
 ) -> Vec<String> {
     let mut a: Vec<String> = ["-hide_banner", "-loglevel", "error", "-y", "-fflags", "+genpts", "-f", "concat", "-safe", "0", "-i"]
         .iter()
@@ -370,6 +403,10 @@ fn mux_args(
         a.push("-i".into());
         a.push(path.to_string_lossy().into_owned());
     }
+    // Last input: the single segment the preview frame comes from. One
+    // decoder thread: only its first frame is ever decoded.
+    let thumb_input = audio.len() + 1;
+    a.extend(["-threads".to_string(), "1".to_string(), "-i".to_string(), thumb_from.to_string_lossy().into_owned()]);
     a.extend(["-map", "0:v:0", "-c:v", "copy"].iter().map(|x| x.to_string()));
     // Normalise each source to 48 kHz stereo; mix only at export so the
     // video stream is never re-encoded by audio settings.
@@ -417,9 +454,7 @@ fn mux_args(
     a.extend(
         [
             "-map".into(),
-            "0:v:0".into(),
-            "-ss".into(),
-            format!("{thumb_at:.2}"),
+            format!("{thumb_input}:v:0"),
             "-frames:v".into(),
             "1".into(),
             "-vf".into(),
@@ -499,6 +534,34 @@ mod tests {
         assert_eq!(trim, 40.0);
         let (selected, _, _, _) = select_tail(&timeline(), 12.0);
         assert_eq!(selected.len(), 6);
+    }
+
+    #[test]
+    fn trim_keeps_whole_segments_and_preview_reads_one() {
+        let seg = |i: usize| TimedSegment {
+            path: PathBuf::from(format!("segment_{i:06}.mkv")),
+            start_wall: 100.0 + 2.0 * i as f64,
+            end_wall: 102.0 + 2.0 * i as f64,
+        };
+        let selected: Vec<TimedSegment> = (0..10).map(seg).collect(); // 100..120
+        // Keep 105..113: segments 2 (104-106) to 6 (112-114).
+        let kept = keep_window(&selected, 105.0, 113.0);
+        assert_eq!(kept.len(), 5);
+        assert_eq!((kept[0].start_wall, kept[4].end_wall), (104.0, 114.0));
+        // A range that ends exactly on a boundary doesn't pull in the next one.
+        assert_eq!(keep_window(&selected, 104.0, 106.0).len(), 1);
+        // A play at 108.7 is nearest to the start of segment 4 (108); at
+        // 109.3 the start of segment 5 (110) is nearer.
+        assert_eq!(thumb_source(&selected, 108.7), PathBuf::from("segment_000004.mkv"));
+        assert_eq!(thumb_source(&selected, 109.3), PathBuf::from("segment_000005.mkv"));
+        // Before the start or past the end: the first or last segment.
+        assert_eq!(thumb_source(&selected, 0.0), PathBuf::from("segment_000000.mkv"));
+        assert_eq!(thumb_source(&selected, 500.0), PathBuf::from("segment_000009.mkv"));
+
+        let settings = crate::config::Settings::default();
+        let args = mux_args(&settings, Path::new("list.txt"), &[], Path::new("out.mp4"), Path::new("out.jpg"), Path::new("seg.mkv")).join(" ");
+        assert!(args.contains("-i list.txt -threads 1 -i seg.mkv -map 0:v:0 -c:v copy"), "{args}");
+        assert!(args.contains("-map 1:v:0 -frames:v 1"), "{args}");
     }
 
     #[test]

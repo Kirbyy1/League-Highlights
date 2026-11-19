@@ -163,18 +163,20 @@ impl Recorder {
 
     pub fn start(&self, settings: &Settings, window: &GameWindow) -> Result<(), String> {
         let mut last_error = String::from("Capture could not start.");
-        let mut av1_failed = false;
+        let mut av1_failures = 0;
         for _ in 0..4 {
             let h264 = self.ff.choose_encoder()?;
-            let av1 = (settings.video_codec == "av1" && !av1_failed).then(|| self.ff.av1_variant(h264)).flatten();
+            // AV1 gets two tries: a capture that fails to start is often not
+            // the encoder's fault (the game window is still settling).
+            let av1 = (settings.video_codec == "av1" && av1_failures < 2).then(|| self.ff.av1_variant(h264)).flatten();
             let encoder = av1.unwrap_or(h264);
             match self.start_with(settings, window, encoder) {
                 Ok(()) => return Ok(()),
                 Err(error) if av1.is_some() => {
                     // AV1 didn't start: record in H.264 instead.
                     self.stop();
-                    log::warn!("{encoder} failed to start ({error}); using {h264}");
-                    av1_failed = true;
+                    av1_failures += 1;
+                    log::warn!("{encoder} failed to start ({error}); {}", if av1_failures < 2 { "trying once more".to_string() } else { format!("using {h264}") });
                     last_error = error;
                     continue;
                 }

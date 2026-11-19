@@ -66,6 +66,16 @@ impl GameWindow {
 
 const GAME_PROCESSES: [&str; 2] = ["league of legends.exe", "leagueoflegends.exe"];
 
+/// Development aid: `LH_TEST_GAME=name.exe` treats that program's window as
+/// the game, so detection, recording and the library window's behaviour
+/// behind a game can be exercised without League.
+fn is_test_game(file: &str) -> bool {
+    static NAME: OnceLock<Option<String>> = OnceLock::new();
+    NAME.get_or_init(|| std::env::var("LH_TEST_GAME").ok().map(|n| n.to_lowercase()))
+        .as_deref()
+        == Some(file)
+}
+
 /// Find the visible in-game window (not the launcher/client).
 pub fn find_league_window() -> Option<GameWindow> {
     let mut found: Vec<GameWindow> = Vec::new();
@@ -96,7 +106,7 @@ unsafe fn inspect_window(hwnd: HWND) -> Option<GameWindow> {
         .file_name()?
         .to_string_lossy()
         .to_lowercase();
-    if !GAME_PROCESSES.contains(&file.as_str()) {
+    if !GAME_PROCESSES.contains(&file.as_str()) && !is_test_game(&file) {
         return None;
     }
     let mut title = [0u16; 256];

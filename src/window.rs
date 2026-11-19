@@ -9,7 +9,7 @@
 //! shadow, Aero Snap and drag-to-restore stay native; the page asks for
 //! drag / minimize / maximize / close through the WebView IPC bridge.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::num::NonZeroIsize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -23,13 +23,14 @@ use windows::core::{w, PCWSTR};
 use windows::core::BOOL;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
-use windows::Win32::Graphics::Gdi::CreateSolidBrush;
+use windows::Win32::Graphics::Gdi::{CreateSolidBrush, MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
-    GetSystemMetrics, IsIconic, IsWindow, IsZoomed, PostMessageW, PostQuitMessage,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos,
+    GetForegroundWindow, GetMessageW, GetSystemMetrics, IsIconic, IsWindow, IsZoomed, PostMessageW,
+    PostQuitMessage, WM_ACTIVATE,
     RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowPos, ShowWindow,
     TranslateMessage, CW_USEDEFAULT, HTCAPTION, HTTOP, ICON_BIG, ICON_SMALL, MSG,
     NCCALCSIZE_PARAMS, SM_CXPADDEDBORDER, SM_CXSCREEN, SM_CYFRAME, SM_CYSCREEN, SWP_FRAMECHANGED,
@@ -80,6 +81,77 @@ pub fn run_script(script: &str) {
 
 thread_local! {
     static VIEW: RefCell<Option<wry::WebView>> = const { RefCell::new(None) };
+    /// The view is hidden and trimmed (minimized, or behind the game).
+    static SUSPENDED: Cell<bool> = const { Cell::new(false) };
+    static BEHIND_GAME: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The League game window (0 = no game), set by the controller on every poll.
+///
+/// A page left open behind a borderless game still believes it is visible:
+/// measured in a real match, it rendered at 60 fps the whole time and cost 25%
+/// of a core and 230 MB of working set. So while the game is the foreground
+/// window on the same monitor, the view is hidden (WebView2 stops rendering)
+/// and asked to trim its memory. It wakes as soon as the window is activated
+/// or the game closes. A window on another monitor is left alone.
+static GAME_HWND: AtomicIsize = AtomicIsize::new(0);
+const WM_VIEW_STATE: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 21;
+
+pub fn set_game(hwnd: Option<isize>) {
+    let value = hwnd.unwrap_or(0);
+    let previous = GAME_HWND.swap(value, Ordering::SeqCst);
+    let window = OPEN.load(Ordering::SeqCst);
+    // While a game runs, re-check on every poll: the user may have switched
+    // back to it. With no game there is nothing to re-check.
+    if window != 0 && (value != 0 || previous != 0) {
+        unsafe {
+            let _ = PostMessageW(Some(HWND(window as *mut _)), WM_VIEW_STATE, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
+/// Show or suspend the view for the window's current situation.
+/// `activating` is true while the window is becoming the active one.
+unsafe fn update_view_state(hwnd: HWND, activating: bool) {
+    let minimized = IsIconic(hwnd).as_bool();
+    let game = HWND(GAME_HWND.load(Ordering::SeqCst) as *mut _);
+    let game_alive = !game.0.is_null() && IsWindow(Some(game)).as_bool();
+    let foreground = GetForegroundWindow();
+    let behind = if !game_alive || activating || foreground == hwnd {
+        false
+    } else if foreground == game
+        && MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) == MonitorFromWindow(game, MONITOR_DEFAULTTONEAREST)
+    {
+        true
+    } else {
+        // Some other window is in front: keep whatever state we were in.
+        BEHIND_GAME.with(Cell::get)
+    };
+    BEHIND_GAME.with(|b| b.set(behind));
+    let suspend = minimized || behind;
+    if SUSPENDED.with(|s| s.replace(suspend)) == suspend {
+        return;
+    }
+    VIEW.with(|view| {
+        if let Some(view) = view.borrow().as_ref() {
+            use wry::{MemoryUsageLevel, WebViewExtWindows};
+            let _ = view.set_visible(!suspend);
+            let _ = view.set_memory_usage_level(if suspend { MemoryUsageLevel::Low } else { MemoryUsageLevel::Normal });
+        }
+    });
+    if behind {
+        log::info!("Library window paused while the game is in front");
+    }
+}
+
+/// Tell the page whether its window is the active one, so it can pause
+/// animations and poll less while you look elsewhere.
+unsafe fn notify_active(active: bool) {
+    VIEW.with(|view| {
+        if let Some(view) = view.borrow().as_ref() {
+            let _ = view.evaluate_script(&format!("window.lhActive&&lhActive({active})"));
+        }
+    });
 }
 
 struct Parent(isize);
@@ -112,23 +184,33 @@ unsafe extern "system" fn proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
         WM_SIZE => {
             let maximized = IsZoomed(hwnd).as_bool();
             let minimized = wparam.0 == 1; // SIZE_MINIMIZED
-            VIEW.with(|view| {
-                if let Some(view) = view.borrow().as_ref() {
-                    // Minimized: hide the view so WebView2 stops rendering,
-                    // and ask it to trim memory until the window returns.
-                    use wry::{MemoryUsageLevel, WebViewExtWindows};
-                    let _ = view.set_visible(!minimized);
-                    let _ = view.set_memory_usage_level(if minimized {
-                        MemoryUsageLevel::Low
-                    } else {
-                        MemoryUsageLevel::Normal
-                    });
-                    if !minimized {
+            // Minimized: hide the view so WebView2 stops rendering, and ask
+            // it to trim memory until the window returns.
+            update_view_state(hwnd, false);
+            if !minimized {
+                VIEW.with(|view| {
+                    if let Some(view) = view.borrow().as_ref() {
                         let _ = view.evaluate_script(&format!("window.lhWindowState&&lhWindowState({maximized})"));
                     }
-                }
-            });
+                });
+            }
             DefWindowProcW(hwnd, message, wparam, lparam)
+        }
+        WM_ACTIVATE => {
+            let active = (wparam.0 & 0xFFFF) != 0;
+            if active {
+                update_view_state(hwnd, true);
+            } else {
+                // The new foreground window isn't final yet: check once this
+                // message has been handled (and again on the next game poll).
+                let _ = PostMessageW(Some(hwnd), WM_VIEW_STATE, WPARAM(0), LPARAM(0));
+            }
+            notify_active(active);
+            DefWindowProcW(hwnd, message, wparam, lparam)
+        }
+        WM_VIEW_STATE => {
+            update_view_state(hwnd, false);
+            LRESULT(0)
         }
         WM_RUN_SCRIPT => {
             if let Some(script) = PENDING_SCRIPT.lock().unwrap().take() {
@@ -142,6 +224,7 @@ unsafe extern "system" fn proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
         }
         WM_DESTROY => {
             OPEN.store(0, Ordering::SeqCst);
+            crate::library::drop_cache();
             PostQuitMessage(0);
             LRESULT(0)
         }

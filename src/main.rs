@@ -83,7 +83,8 @@ fn main() {
 
     if std::env::args().any(|a| a == "--selftest") {
         let synthetic = std::env::args().any(|a| a == "--synthetic");
-        let result = selftest::run(&paths, cfg.clone(), ff, 8, synthetic);
+        let smart = std::env::args().any(|a| a == "--smart");
+        let result = selftest::run(&paths, cfg.clone(), ff, 8, synthetic, smart);
         let text = match &result {
             Ok(report) => format!("Self-test passed\n\n{report}"),
             Err(error) => format!("Self-test failed\n\n{error}"),

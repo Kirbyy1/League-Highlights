@@ -600,6 +600,8 @@ impl Controller {
         self.maybe_cleanup();
         let found = find_league_window();
         self.live.game_present.store(found.is_some(), Ordering::SeqCst);
+        crate::ptt::set_in_game(found.is_some());
+        crate::window::set_game(found.as_ref().map(|w| w.hwnd));
         let Some(window) = found else {
             if self.window.take().is_some() {
                 log::info!("League game window closed");

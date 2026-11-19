@@ -60,11 +60,12 @@ Measured on the release build:
 
 | | |
 |---|---|
-| Idle in the tray | ~0 CPU, ~2.5–4.5 MB private memory |
-| Polling a live match (not recording) | ~0.4 % of one core |
-| Library window open | 5 processes, ~140 MB private (released when closed or minimized) |
-| Recording 1080p60 on NVENC | FFmpeg ≈ 0.5 % CPU (frames stay on the GPU) |
-| Saving a clip | 1 FFmpeg run, ~1.7 s for a 10 s clip |
+| Idle in the tray | ~0 CPU, ~6 MB private memory |
+| During a match (the app itself) | 0.2–0.4 % of one core, ~21 MB |
+| Library window open | 4 processes, ~135 MB private; closed or minimized releases it |
+| Library window behind a game | paused automatically: ~0.2 % of one core, 25–50 MB in use |
+| Recording 1080p60 on NVENC (real match) | FFmpeg ≈ 6 % of one core, ~256 MB private (93 MB in use); frames stay on the GPU |
+| Saving a clip | 1 FFmpeg run, ~0.6 s of CPU for a 30 s clip |
 
 ## Install
 
